@@ -1,37 +1,37 @@
-title: compaction: hangs on "Compacting" with no retry feedback when upstream returns 503 or sends SSE keepalives
+title: compaction: stays on "Compacting" with no feedback when the provider fails or only sends SSE keepalives
 ---
 ### Description
 
-When a compaction request hits an unhealthy upstream (503 / rate limit / stalled stream behind a proxy), the UI stays on "Compacting" with 0 characters and no error or retry notice — in my case for over 90 minutes until I interrupted the session via `/api/session/:id/interrupt`.
+A manual `/compact` sat on "Compacting" with an empty summary for over 90 minutes. There was no error and no retry notice. I had to call `/api/session/:id/interrupt` to get the session back. The provider was returning `503 no eligible upstream account is currently available`.
 
-Two code paths cause this:
+I traced this to two causes on `dev`:
 
-1. **Silent retries in `SessionCompaction.deliver` (`packages/core/src/session/compaction.ts:619-695`).**
-   Normal assistant steps use `SessionRunnerRetry.make(bus, sessionID).wait(...)`, which publishes `SessionEvent.RetryScheduled` so the UI shows the error and retry countdown. Compaction only calls `SessionRunnerRetry.policy(sessionID)` and `Effect.sleep(decision.delay)` — no event is published and nothing is logged, so 10 retry attempts look identical to a stuck stream.
+1. **Compaction retries are silent.** In `packages/core/src/session/compaction.ts` (`deliver`, around L619-L686), retryable provider errors go through `SessionRunnerRetry.policy(...)` and then `Effect.sleep(decision.delay)`. Normal steps use `SessionRunnerRetry.make(...).wait(...)`, which publishes `SessionEvent.RetryScheduled`. Compaction publishes nothing and logs nothing, so up to 10 retries look the same as a frozen stream.
 
-2. **Chunk timeout is attached to raw bytes before SSE framing (`packages/ai/src/route/transport/http.ts:119-125`).**
-   `Stream.timeoutOrElse` (`DEFAULT_CHUNK_TIMEOUT_MS = 900_000`, 15 min) wraps `RequestExecutor.responseStream(response)` *before* `prepared.framing.frame(...)`. Any proxy/Cloudflare that flushes `: keepalive` comments or `event: ping` frames every 15–30s resets the 15-minute timer on every byte chunk, while `sseFraming` drops those keepalives downstream — so the model event stream never emits and never times out.
+2. **SSE keepalives reset the 15-minute chunk timeout.** In `packages/ai/src/route/transport/http.ts` (L119-L125), `Stream.timeoutOrElse` (`DEFAULT_CHUNK_TIMEOUT_MS = 900_000`) wraps the raw byte stream before `framing.frame(...)`. `sseFraming` drops `: keepalive` comments later, but each one has already reset the timer. I checked this with a test next to `packages/ai/test/http-timeout.test.ts`: one `data:` event, then silence, fails with "Timed out waiting for response data". One `data:` event, then `: keepalive` comments, has still not finished after 20 virtual minutes.
 
-Moving `Stream.timeoutOrElse` after framing (or timing meaningful protocol events) and publishing retry status during compaction would fix both.
+#43618 fixed this for the old `aisdk.ts` path, and #43519 was closed. The V2 transport has the same problem. #54544 adds logging to the step retry path, but it does not cover compaction.
+
+Possible fix: apply the chunk timeout after framing, so it times protocol frames instead of bytes, and publish retry status from compaction.
 
 ### Plugins
 
-None required to reproduce
+None needed to reproduce
 
 ### OpenCode version
 
-2.2.5 (`dev` @ `1bf08ae46a`)
+2.2.5 (`dev` @ 1bf08ae46a)
 
 ### Steps to reproduce
 
-1. Point a provider at an endpoint that returns HTTP 503 (or holds an SSE connection open while sending `: keepalive\n\n` every 20s).
-2. Run `/compact` in a session.
-3. Observe the session stays on "Compacting" with no retry indicator and no timeout when keepalives are present.
+1. Configure a provider whose endpoint either returns HTTP 503, or sends one SSE `data:` event and then only `: keepalive` comments.
+2. Run `/compact` in any session.
+3. The compaction row stays on "Compacting". With 503 there is no retry notice until all retries are used. With keepalives it never times out.
 
 ### Operating System
 
-macOS (arm64)
+macOS 26.5.1
 
 ### Terminal
 
-Web UI / Ghostty
+Web app (`packages/app`)
