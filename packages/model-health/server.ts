@@ -9,6 +9,9 @@ export default Plugin.define({
     const ttl = number(ctx.options.ttlMs, 60_000)
     const timeout = number(ctx.options.timeoutMs, 15_000)
     const prompt = typeof ctx.options.prompt === "string" ? ctx.options.prompt : "Reply with OK."
+    // `ctx.generate` is deprecated in favour of `ctx.experimental.generate` from 2.2; keep both working.
+    const generate: Pick<typeof ctx.generate, "text"> =
+      "generate" in ctx.experimental ? (ctx.experimental.generate as typeof ctx.generate) : ctx.generate
     const cache = new Map<string, Health>()
     const inflight = new Map<string, Promise<Health>>()
 
@@ -18,7 +21,7 @@ export default Plugin.define({
       if (!model) return { status: "unavailable", reason: "not_found" }
       const started = Date.now()
       const outcome = await Promise.race([
-        ctx.generate
+        generate
           .text({ prompt, model: { providerID: model.providerID, id: model.id } })
           .then(() => "ok" as const, (error: unknown) => ({ error })),
         Bun.sleep(timeout).then(() => "timeout" as const),
@@ -55,12 +58,26 @@ function number(value: unknown, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback
 }
 
-// Plugin generation errors only expose a tag and a message, so the reason is inferred from both.
+// Newer OpenCode returns `ProviderRequestError` with a structured `reason`; older versions only expose a tag and a
+// message, so the reason is inferred from those as a fallback.
+const structured: Record<string, Reason> = {
+  authentication: "authentication",
+  rate_limit: "rate_limit",
+  content_filter: "provider",
+  invalid_request: "configuration",
+  overloaded: "provider",
+  provider: "provider",
+}
+
 function classify(error: unknown): Reason {
   const tag = typeof error === "object" && error !== null && "_tag" in error ? String(error._tag) : ""
   const message =
     typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error)
-  if (tag === "Generate.ModelSelectionError") return "configuration"
+  const reason = typeof error === "object" && error !== null && "reason" in error ? String(error.reason) : ""
+  if (tag.endsWith("ProviderRequestError") && reason in structured) return structured[reason]!
+  if (tag.endsWith("ModelNotFoundError")) return "not_found"
+  if (tag.endsWith("UnsupportedModelError")) return "unsupported"
+  if (tag === "Generate.ModelSelectionError" || tag.endsWith("InvalidRequestError")) return "configuration"
   const rules: ReadonlyArray<readonly [Reason, RegExp]> = [
     ["authentication", /\b40[13]\b|unauthori[sz]ed|authenticat|api[ -]?key|credential|forbidden/i],
     ["rate_limit", /\b429\b|rate.?limit|too many requests/i],
