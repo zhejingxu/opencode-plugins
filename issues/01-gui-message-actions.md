@@ -1,4 +1,4 @@
-title: [FEATURE]: GUI plugin extension point for timeline message actions
+title: [FEATURE]: Let GUI plugins add per-message actions and reveal a message in the timeline
 ---
 ### Feature hasn't been suggested before.
 
@@ -6,21 +6,25 @@ title: [FEATURE]: GUI plugin extension point for timeline message actions
 
 ### Describe the enhancement you want to request
 
-GUI plugins can add panels, commands, slots and composer pills, but nothing per message in the timeline. The action row under a user message or assistant response (copy, revert, fork) is fixed.
+GUI plugins can add commands, panels, slots and composer pills, but nothing on an individual message. The action row under a user message or an assistant response (copy, revert, fork) is fixed, and a plugin can't scroll the timeline to a given message.
 
-I built "pin a Q&A turn" (#55195) in my fork: a pin button on the user message and the response, and a resizable panel that lists pinned turns and jumps back to them. The panel could be a GUI plugin, but the button can only be done by patching `session-ui`, so I have to rebase it on every release.
+That is what blocks #55195 (pin messages) from being a plugin, as the bot noted there. I built pinning in my fork: a pin button on the user message and on the response, plus a panel that lists pinned turns and jumps back to them. The panel itself would fit the current plugin API, but the button and the jump need a patch to `session-ui` and `app`, which I have to rebase on every release.
 
-Proposal: a `MessageAction` registry, e.g.
+Proposal:
 
 ```ts
 ctx.add(MessageAction, {
   id: "pin",
   on: ["user", "assistant"],
-  icon: () => (pinned(input.messageID) ? "pin-active" : "pin"),
+  icon: (input) => (pinned(input.messageID) ? "pin-active" : "pin"),
   title: () => ctx.t("pin"),
-  pressed: () => pinned(input.messageID),
+  pressed: (input) => pinned(input.messageID),
   run: (input) => toggle(input.sessionID, input.messageID),
 })
+
+ctx.sessions.reveal({ sessionID, messageID })
 ```
 
-with `{ sessionID, messageID, role }` as input. A per-session store for the plugin to keep the pinned IDs would cover the rest. Happy to send a PR if the shape looks right.
+with `{ sessionID, messageID, role }` as the action input. A per-session store (already available through `stores`) covers the rest.
+
+Patch for reference: https://github.com/zhejingxu/opencode-plugins/blob/main/patches/0002-feat-app-pin-Q-A-turns-to-a-left-side-panel.patch
