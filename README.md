@@ -1,0 +1,46 @@
+# opencode-plugins
+
+My OpenCode customizations, kept outside the OpenCode source tree so they survive upstream merges and can be set up
+on a new machine in two commands.
+
+| Part | Type | What it does |
+| ---- | ---- | ------------ |
+| [`packages/model-health`](packages/model-health) | server + TUI plugin | On-demand model availability probes (`model-health` RPC, `/health`, `/health-all`) |
+| [`packages/adaptive-effort`](packages/adaptive-effort) | server plugin | Per-turn reasoning effort and cheaper sibling models for subagents/title/compaction |
+| [`patches/0001`](patches) | source patch | Desktop + TUI: compaction summaries collapsed by default |
+| [`patches/0002`](patches) | source patch | Desktop: pin Q&A turns to a left-side panel |
+| [`patches/0003`](patches) | source patch | Desktop: model health dots and "Check" in the model selector (uses `model-health`) |
+
+The plugins use only the public plugin API (`@opencode/plugin`, `@opencode/plugin/tui`). The patches touch the
+Desktop/TUI timeline and model picker, which have no plugin extension point in v2.0.29; see [`issues/`](issues) for
+the upstream requests that would let them become plugins too.
+
+## New machine
+
+```sh
+git clone https://github.com/<you>/opencode-plugins.git ~/Documents/ChatGPT/opencode-plugins
+~/Documents/ChatGPT/opencode-plugins/scripts/install.sh            # symlinks plugins into ~/.config/opencode/plugins
+# only if you run OpenCode from source and want the UI patches:
+~/Documents/ChatGPT/opencode-plugins/scripts/apply-patches.sh ~/Documents/ChatGPT/opencode
+```
+
+## Merging upstream
+
+```sh
+cd ~/Documents/ChatGPT/opencode
+git fetch origin
+git switch local-features
+git rebase origin/dev                      # resolve conflicts in the three feature commits only
+~/Documents/ChatGPT/opencode-plugins/scripts/export-patches.sh . origin/dev local-features
+```
+
+Plugins need no rebase. `patches/BASE` records the upstream commit the patches were last exported from.
+
+## Development
+
+```sh
+bun install
+bun run typecheck
+```
+
+Plugins are loaded from source, so edits under `packages/*` hot-reload in a running OpenCode once installed.

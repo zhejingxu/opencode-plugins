@@ -1,0 +1,17 @@
+{
+  "name": "@xuzhejing/opencode-adaptive-effort",
+  "version": "0.1.0",
+  "description": "Picks reasoning effort and cheaper sibling models per turn, subagent and auxiliary call",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.ts",
+    "./server": "./index.ts"
+  },
+  "files": [
+    "index.ts"
+  ],
+  "peerDependencies": {
+    "@opencode/plugin": "^2.0.29 || ^0.0.0-dev"
+  }
+}

@@ -1,0 +1,513 @@
+From b05a191bfc34e8345ef7150ad4e2169706c1050f Mon Sep 17 00:00:00 2001
+From: xuzhejing <xuzhejing@bytedance.com>
+Date: Tue, 3 Nov 2026 09:57:30 +0800
+Subject: [PATCH 3/3] feat(app): show model health from the model-health plugin
+ in the model selector
+
+---
+ .../app/src/providers/models/health-rpc.ts    |  42 ++++++
+ .../app/src/providers/models/health.test.ts   |  49 +++++++
+ packages/app/src/providers/models/health.tsx  | 138 ++++++++++++++++++
+ .../src/providers/models/select-dialog.css    |  33 +++++
+ .../src/providers/models/select-dialog.tsx    |  66 ++++++++-
+ packages/app/src/runtime/i18n/en.ts           |  18 +++
+ 6 files changed, 345 insertions(+), 1 deletion(-)
+ create mode 100644 packages/app/src/providers/models/health-rpc.ts
+ create mode 100644 packages/app/src/providers/models/health.test.ts
+ create mode 100644 packages/app/src/providers/models/health.tsx
+
+diff --git a/packages/app/src/providers/models/health-rpc.ts b/packages/app/src/providers/models/health-rpc.ts
+new file mode 100644
+index 0000000000..109c29f306
+--- /dev/null
++++ b/packages/app/src/providers/models/health-rpc.ts
+@@ -0,0 +1,42 @@
++import { Schema } from "effect"
++import { Rpc } from "@opencode/schema/rpc"
++
++// Mirror of the `model-health` plugin contract (opencode-plugins/packages/model-health/src/rpc.ts).
++// The server side is provided by that plugin; without it the selector simply shows no health state.
++export const Reason = Schema.Literals([
++  "not_found",
++  "unsupported",
++  "configuration",
++  "authentication",
++  "rate_limit",
++  "quota",
++  "provider",
++  "timeout",
++  "network",
++  "unknown",
++])
++
++export const Health = Schema.Struct({
++  status: Schema.Literals(["available", "unavailable", "unknown"]),
++  checkedAt: Schema.Number,
++  latencyMs: Schema.optional(Schema.Number),
++  reason: Schema.optional(Reason),
++})
++export type Health = typeof Health.Type
++
++export const Definition = Rpc.define({
++  id: "model-health",
++  methods: {
++    check: {
++      input: Schema.toStandardSchemaV1(
++        Schema.Struct({
++          providerID: Schema.String,
++          modelID: Schema.String,
++          force: Schema.optional(Schema.Boolean),
++        }),
++      ),
++      output: Schema.toStandardSchemaV1(Health),
++    },
++  },
++  events: {},
++})
+diff --git a/packages/app/src/providers/models/health.test.ts b/packages/app/src/providers/models/health.test.ts
+new file mode 100644
+index 0000000000..e39b47af1d
+--- /dev/null
++++ b/packages/app/src/providers/models/health.test.ts
+@@ -0,0 +1,49 @@
++import { afterEach, expect, mock, setSystemTime, test } from "bun:test"
++import { createRoot } from "solid-js"
++
++const request = mock(async () => ({ status: "available" as const, checkedAt: Date.now() }))
++const rpc = mock((definition: { id: string }) => ({ id: definition.id, check: request }))
++
++mock.module("@/runtime/server/client", () => ({
++  useServerSDK: () => ({ scope: "health-test", api: { rpc } }),
++}))
++
++mock.module("@/workspaces/location", () => ({
++  useWorkspaceLocation: () => () => ({ ref: { directory: "/health-test" } }),
++}))
++
++const { createModelHealth } = await import("./health")
++
++afterEach(() => setSystemTime())
++
++// Owns the UI contract: a probe goes through the model-health plugin RPC and
++// updates only the exact model that was checked.
++test("model health is scoped to the checked model", async () => {
++  const root = createRoot((dispose) => ({ health: createModelHealth(), dispose }))
++  expect(request).not.toHaveBeenCalled()
++  expect(root.health.result("gateway", "opus")).toBeUndefined()
++  await root.health.check("gateway", "opus")
++  expect(rpc.mock.results[0]?.value).toMatchObject({ id: "model-health" })
++  expect(request).toHaveBeenCalledWith(
++    { providerID: "gateway", modelID: "opus", force: undefined },
++    { location: { directory: "/health-test" } },
++  )
++  expect(root.health.result("gateway", "opus")?.status).toBe("available")
++  expect(root.health.result("relay", "opus")).toBeUndefined()
++  expect(root.health.result("gateway", "sonnet")).toBeUndefined()
++  expect(root.health.checking()).toBe(false)
++  root.dispose()
++})
++
++test("stops probing when the server has no model-health plugin", async () => {
++  request.mockImplementationOnce(async () => {
++    throw { type: "rpc.unavailable", message: "RPC is unavailable: model-health" }
++  })
++  const root = createRoot((dispose) => ({ health: createModelHealth(), dispose }))
++  await root.health.check("missing", "model")
++  expect(root.health.supported()).toBe(false)
++  const calls = request.mock.calls.length
++  await root.health.checkAll([{ id: "other", provider: { id: "missing" } }])
++  expect(request.mock.calls.length).toBe(calls)
++  root.dispose()
++})
+diff --git a/packages/app/src/providers/models/health.tsx b/packages/app/src/providers/models/health.tsx
+new file mode 100644
+index 0000000000..a5e64315e6
+--- /dev/null
++++ b/packages/app/src/providers/models/health.tsx
+@@ -0,0 +1,138 @@
++import { createEffect, onCleanup } from "solid-js"
++import { createStore } from "solid-js/store"
++import { useServerSDK } from "@/runtime/server/client"
++import { useWorkspaceLocation } from "@/workspaces/location"
++import { useLanguage } from "@/runtime/i18n/language"
++import { Definition, type Health as ModelHealth } from "./health-rpc"
++
++type ModelTarget = {
++  readonly id: string
++  readonly provider: {
++    readonly id: string
++  }
++}
++
++const [results, setResults] = createStore<Record<string, ModelHealth | undefined>>({})
++
++const [pending, setPending] = createStore<Record<string, boolean | undefined>>({})
++
++const inflight = new Map<string, Promise<void>>()
++
++// Servers without the model-health plugin answer with one of these; stop probing them.
++const missing = new Set(["rpc.unavailable", "rpc.method_not_found"])
++
++const [unsupported, setUnsupported] = createStore<Record<string, boolean | undefined>>({})
++
++const errorType = (error: unknown) =>
++  typeof error === "object" && error !== null && "type" in error && typeof error.type === "string"
++    ? error.type
++    : undefined
++
++export function createModelHealth() {
++  const sdk = useServerSDK()
++  const location = useWorkspaceLocation()
++  const [store, setStore] = createStore({ now: Date.now() })
++
++  const key = (providerID: string, modelID: string) =>
++    JSON.stringify([sdk.scope, location().ref, providerID, modelID])
++
++  createEffect(() => {
++    const timer = setInterval(() => setStore("now", Date.now()), 10000)
++    onCleanup(() => clearInterval(timer))
++  })
++
++  const scope = () => JSON.stringify([sdk.scope, location().ref])
++
++  const supported = () => !unsupported[scope()]
++
++  const result = (providerID: string, modelID: string) => {
++    const value = results[key(providerID, modelID)]
++
++    return value && store.now - Number(value.checkedAt) < 60000 ? value : undefined
++  }
++
++  const check = (providerID: string, modelID: string, options?: { force?: boolean }) => {
++    const target = key(providerID, modelID)
++
++    if (!supported()) return Promise.resolve()
++    if (!options?.force && result(providerID, modelID)) return Promise.resolve()
++    const existing = inflight.get(target)
++
++    if (existing) return existing
++
++    setPending(target, true)
++
++    const current = scope()
++    const task = sdk.api
++      .rpc(Definition)
++      .check({ providerID, modelID, force: options?.force }, { location: location().ref })
++      .then((response) => setResults(target, response))
++      .catch((error: unknown) => {
++        const type = errorType(error)
++
++        if (type && missing.has(type)) return setUnsupported(current, true)
++        setResults(target, { status: "unavailable", checkedAt: Date.now(), reason: "network" })
++      })
++      .finally(() => {
++        inflight.delete(target)
++        setPending(target, undefined)
++        setStore("now", Date.now())
++      })
++
++    inflight.set(target, task)
++
++    return task
++  }
++
++  const checkAll = async (items: readonly ModelTarget[], options?: { force?: boolean }) => {
++    if (!supported()) return
++    const queue = items.filter((item) => options?.force || !result(item.provider.id, item.id))
++
++    if (queue.length === 0) return
++    let index = 0
++
++    const worker = async () => {
++      while (index < queue.length) {
++        const current = queue[index]
++        index += 1
++
++        if (current) await check(current.provider.id, current.id, options)
++      }
++    }
++
++    await Promise.all([worker(), worker()])
++  }
++
++  return {
++    supported,
++    checking: () => Object.values(pending).some(Boolean),
++    pending: (providerID: string, modelID: string) => Boolean(pending[key(providerID, modelID)]),
++    result,
++    check,
++    checkAll,
++  }
++}
++
++export function ModelHealthIndicator(props: { result?: ModelHealth; pending?: boolean }) {
++  const language = useLanguage()
++  const status = () => props.result?.status ?? (props.pending ? "checking" : "unknown")
++
++  const label = () => {
++    if (props.pending && !props.result) return language.t("model.health.checking")
++    const current = props.result?.status ?? "unknown"
++    const text = language.t(`model.health.${current}`)
++
++    if (!props.result) return text
++
++    const detail = language.t("model.health.detail", {
++      status: text,
++      time: new Date(Number(props.result.checkedAt)).toLocaleTimeString(),
++    })
++
++    return props.result.reason
++      ? `${detail} · ${language.t(`model.health.reason.${props.result.reason}`)}`
++      : detail
++  }
++
++  return <span class="model-health-indicator" data-status={status()} role="img" aria-label={label()} title={label()} />
++}
+diff --git a/packages/app/src/providers/models/select-dialog.css b/packages/app/src/providers/models/select-dialog.css
+index bfd9e8422e..4e14863e01 100644
+--- a/packages/app/src/providers/models/select-dialog.css
++++ b/packages/app/src/providers/models/select-dialog.css
+@@ -36,3 +36,36 @@
+     padding-inline: 0;
+   }
+ }
++.model-health-indicator {
++  display: inline-block;
++  flex-shrink: 0;
++  width: 8px;
++  height: 8px;
++  border-radius: 50%;
++  background: var(--v2-icon-icon-faint);
++
++  &[data-status="checking"] {
++    background: var(--v2-icon-icon-muted);
++    animation: model-health-pulse 1.2s ease-in-out infinite;
++  }
++
++  &[data-status="available"] {
++    background: #16a34a;
++    box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.18);
++  }
++
++  &[data-status="unavailable"] {
++    background: #dc2626;
++    box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.18);
++  }
++}
++
++@keyframes model-health-pulse {
++  0%,
++  100% {
++    opacity: 0.35;
++  }
++  50% {
++    opacity: 0.9;
++  }
++}
+diff --git a/packages/app/src/providers/models/select-dialog.tsx b/packages/app/src/providers/models/select-dialog.tsx
+index 929f4385f3..77e6d22158 100644
+--- a/packages/app/src/providers/models/select-dialog.tsx
++++ b/packages/app/src/providers/models/select-dialog.tsx
+@@ -14,6 +14,7 @@ import { Tooltip } from "@opencode/ui/tooltip"
+ import { Menu } from "@opencode/ui/menu"
+ import { TextInput } from "@opencode/ui/text-input"
+ import { ModelTooltip } from "./tooltip"
++import { createModelHealth, ModelHealthIndicator } from "./health"
+ import { useLanguage } from "@/runtime/i18n/language"
+ import { ExternalLink } from "@/runtime/platform/external-link"
+ import { useData } from "@/runtime/server/current"
+@@ -51,6 +52,8 @@ const modelKey = (model: ModelItem) => `${model.provider.id}:${model.id}`
+ 
+ const manageKey = "action:manage"
+ 
++const checkKey = "action:check"
++
+ const sortModelGroups = (a: { category: string; items: ModelItem[] }, b: { category: string; items: ModelItem[] }) => {
+   const aIndex = popularProviders.indexOf(a.category)
+   const bIndex = popularProviders.indexOf(b.category)
+@@ -74,6 +77,7 @@ const ModelList: Component<{
+   model?: ModelState
+ }> = (props) => {
+   const language = useLanguage()
++  const health = createModelHealth()
+ 
+   const controller = createModelSelectorController({
+     model: props.model,
+@@ -107,6 +111,11 @@ const ModelList: Component<{
+       (item) => expanded(item.provider.id) && (!managedIDs().has(item.provider.id) || expanded(CONSOLE_GROUP_KEY)),
+     )
+ 
++  createEffect(() => {
++    if (props.mobile && !props.open) return
++    void health.checkAll(visibleModels())
++  })
++
+   let scrollRef: HTMLDivElement | undefined
+ 
+   const setSearch = (value: string) => {
+@@ -152,6 +161,10 @@ const ModelList: Component<{
+             >
+               <div data-slot="settings-row-copy">
+                 <div data-slot="settings-row-title" class="flex items-center gap-2">
++                  <ModelHealthIndicator
++                    result={health.result(item.provider.id, item.id)}
++                    pending={health.pending(item.provider.id, item.id)}
++                  />
+                   <Tooltip
+                     inactive={props.mobile}
+                     placement="right-start"
+@@ -185,6 +198,16 @@ const ModelList: Component<{
+ 
+   return (
+     <div class="flex min-h-0 flex-1 flex-col">
++      <Show when={health.supported()}>
++        <Button
++          variant="ghost"
++          disabled={health.checking() || !visibleModels().length}
++          title={language.t("model.health.cost")}
++          onClick={() => void health.checkAll(visibleModels(), { force: true })}
++        >
++          {language.t(health.checking() ? "model.health.checking" : "model.health.check")}
++        </Button>
++      </Show>
+       <div data-slot="model-selector-search" class="shrink-0 pt-px pb-3" classList={{ "px-4": !props.mobile }}>
+         <TextInput
+           type="search"
+@@ -265,6 +288,7 @@ export function ModelSelectorPopover(props: {
+ }) {
+   const dialog = useDialog()
+   const mobile = createMediaQuery("(max-width: 767px)")
++  const health = createModelHealth()
+   const data = useData()
+   const location = useWorkspaceLocation()
+ 
+@@ -304,6 +328,7 @@ export function ModelSelectorPopover(props: {
+           models={controller.models}
+           groups={controller.groups}
+           current={controller.current()}
++          health={health}
+           chatgptPlan={chatgptPlan()}
+           select={controller.select}
+           onManage={manage}
+@@ -500,6 +525,7 @@ export function ModelSelectorPopoverView(props: {
+   models: (search: string) => ModelItem[]
+   groups: (models: ModelItem[]) => { category: string; items: ModelItem[] }[]
+   current: string | undefined
++  health?: ReturnType<typeof createModelHealth>
+   chatgptPlan?: boolean
+   select: (item: ModelItem) => void
+   onManage: () => void
+@@ -513,7 +539,11 @@ export function ModelSelectorPopoverView(props: {
+ 
+   const models = createMemo(() => props.models(store.search))
+   const groups = createMemo(() => props.groups(models()))
+-  const keys = () => [...groups().flatMap((group) => group.items.map(modelKey)), manageKey]
++  const keys = () => [
++    ...groups().flatMap((group) => group.items.map(modelKey)),
++    ...(props.health?.supported() ? [checkKey] : []),
++    manageKey,
++  ]
+ 
+   const managed = createMemo(() => consoleModelGroup(props.all()))
+   const managedIDs = createMemo(() => new Set(managed()?.providers.map((provider) => provider.id)))
+@@ -571,6 +601,16 @@ export function ModelSelectorPopoverView(props: {
+     dismiss.afterClose(props.onManage)
+   }
+ 
++  const check = () => {
++    const item =
++      models().find((item) => modelKey(item) === store.active) ??
++      models().find((item) => modelKey(item) === props.current) ??
++      models()[0]
++
++    if (item) void props.health?.check(item.provider.id, item.id, { force: true })
++    void props.health?.checkAll(models(), { force: true })
++  }
++
+   const selectActive = () => {
+     const item = models().find((item) => modelKey(item) === store.active)
+ 
+@@ -581,6 +621,8 @@ export function ModelSelectorPopoverView(props: {
+     }
+ 
+     if (store.active === manageKey) manage()
++
++    if (store.active === checkKey) check()
+   }
+ 
+   const moveActive = (delta: number) => {
+@@ -600,6 +642,7 @@ export function ModelSelectorPopoverView(props: {
+ 
+   createEffect(() => {
+     if (!store.open) return
++    void props.health?.checkAll(models())
+     createEventListener(
+       document,
+       "keydown",
+@@ -745,6 +788,10 @@ export function ModelSelectorPopoverView(props: {
+                                 }}
+                                 onSelect={() => selectModel(item)}
+                               >
++                                <ModelHealthIndicator
++                                  result={props.health?.result(item.provider.id, item.id)}
++                                  pending={props.health?.pending(item.provider.id, item.id)}
++                                />
+                                 <span class="min-w-0 truncate leading-5">{item.name}</span>
+                                 <Show when={isFree(item.provider.id, item.cost)}>
+                                   <Badge class="shrink-0">{language.t("model.tag.free")}</Badge>
+@@ -765,6 +812,23 @@ export function ModelSelectorPopoverView(props: {
+           </ScrollView>
+           <div class="h-px bg-v2-border-border-muted" />
+           <div class="flex flex-col p-0.5">
++            <Show when={props.health?.supported()}>
++              <button
++                type="button"
++                class="flex h-8 w-full items-center gap-2 rounded-sm px-3 text-start text-[13px] leading-5 text-v2-text-text-muted hover:bg-v2-overlay-simple-overlay-hover disabled:opacity-50"
++                disabled={!props.health || props.health.checking() || !models().length}
++                data-option-key={checkKey}
++                title={language.t("model.health.cost")}
++                onPointerDown={(event) => event.preventDefault()}
++                onMouseEnter={() => {
++                  setStore("active", checkKey)
++                  setTimeout(() => searchRef?.focus())
++                }}
++                onClick={check}
++              >
++                {language.t(props.health?.checking() ? "model.health.checking" : "model.health.checkHighlighted")}
++              </button>
++            </Show>
+             <Menu.Item
+               data-option-key={manageKey}
+               classList={{ "!bg-v2-overlay-simple-overlay-hover": store.active === manageKey }}
+diff --git a/packages/app/src/runtime/i18n/en.ts b/packages/app/src/runtime/i18n/en.ts
+index 095bbd8800..76cc236fb0 100644
+--- a/packages/app/src/runtime/i18n/en.ts
++++ b/packages/app/src/runtime/i18n/en.ts
+@@ -1,6 +1,24 @@
+ import { DESKTOP_NATIVE_ENGLISH } from "./desktop-native"
+ 
+ export const dict = {
++  "model.health.available": "Available",
++  "model.health.unavailable": "Unavailable",
++  "model.health.unknown": "Not checked or expired",
++  "model.health.detail": "{{status}} · checked at {{time}}",
++  "model.health.check": "Check selected model",
++  "model.health.checkHighlighted": "Check highlighted model",
++  "model.health.checking": "Checking selected model…",
++  "model.health.cost": "Sends a minimal model request, which may use tokens. Results expire after 60 seconds.",
++  "model.health.reason.not_found": "Model not found",
++  "model.health.reason.unsupported": "Check not supported",
++  "model.health.reason.configuration": "Configuration error",
++  "model.health.reason.authentication": "Authentication failed",
++  "model.health.reason.rate_limit": "Rate limited",
++  "model.health.reason.quota": "Quota exceeded",
++  "model.health.reason.provider": "Provider error",
++  "model.health.reason.timeout": "Request timed out",
++  "model.health.reason.network": "Network error",
++  "model.health.reason.unknown": "Check could not be completed",
+   ...DESKTOP_NATIVE_ENGLISH,
+   "session.location.unavailable": "Session location unavailable",
+   "session.location.description": "Choose another directory to continue this session.",
+-- 
+2.50.1 (Apple Git-155)
+

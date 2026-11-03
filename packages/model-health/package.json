@@ -1,0 +1,21 @@
+{
+  "name": "@xuzhejing/opencode-model-health",
+  "version": "0.1.0",
+  "description": "On-demand model availability probes for OpenCode (RPC + TUI commands)",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./server.ts",
+    "./server": "./server.ts",
+    "./tui": "./tui.ts",
+    "./rpc": "./rpc.ts"
+  },
+  "files": [
+    "server.ts",
+    "tui.ts",
+    "rpc.ts"
+  ],
+  "peerDependencies": {
+    "@opencode/plugin": "^2.0.29 || ^0.0.0-dev"
+  }
+}

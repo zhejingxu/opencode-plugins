@@ -1,0 +1,850 @@
+From f345613336f5a57ae01f83ae417951058772932a Mon Sep 17 00:00:00 2001
+From: xuzhejing <xuzhejing@bytedance.com>
+Date: Tue, 3 Nov 2026 09:55:21 +0800
+Subject: [PATCH 2/3] feat(app): pin Q&A turns to a left-side panel
+
+---
+ .../e2e/regression/timeline-stream.spec.ts    |  51 ++++
+ packages/app/src/runtime/i18n/en.ts           |   4 +
+ packages/app/src/runtime/i18n/zh.ts           |   4 +
+ packages/app/src/session/composer/region.tsx  |   4 +
+ packages/app/src/session/pinned-panel.tsx     | 260 ++++++++++++++++++
+ packages/app/src/session/screen-layout.ts     |  17 +-
+ packages/app/src/session/screen.tsx           |  23 ++
+ packages/app/src/shell/state/layout.tsx       | 115 ++++++++
+ packages/session-ui/src/actions.ts            |   4 +
+ .../src/components/message-part.css           |   6 +-
+ .../src/message/current-message.tsx           |   4 +
+ .../src/message/message-content.tsx           |  45 ++-
+ .../src/timeline/session-timeline-row.tsx     |  10 +
+ packages/ui/src/i18n/en.ts                    |   2 +
+ packages/ui/src/i18n/zh.ts                    |   2 +
+ packages/ui/src/icons/catalog.ts              |   8 +
+ 16 files changed, 552 insertions(+), 7 deletions(-)
+ create mode 100644 packages/app/src/session/pinned-panel.tsx
+
+diff --git a/packages/app/e2e/regression/timeline-stream.spec.ts b/packages/app/e2e/regression/timeline-stream.spec.ts
+index 6de8dde5f6..ebb1828b35 100644
+--- a/packages/app/e2e/regression/timeline-stream.spec.ts
++++ b/packages/app/e2e/regression/timeline-stream.spec.ts
+@@ -1814,6 +1814,57 @@ test.describe("shell completion", () => {
+   })
+ })
+ 
++test("pins a Q&A turn to the left panel and unpins it", async ({ page }) => {
++  const firstUser = userMessage([userText("Give me the implementation checklist", { id: "prt_pin_user_1" })], {
++    id: "msg_pin_user_1",
++    created: 1700000001000,
++  })
++
++  const firstAssistant = assistantMessage(
++    [{ id: "prt_pin_assistant_1", type: "text", text: "1. Design schema\n2. Wire UI\n3. Verify E2E" }],
++    {
++      id: "msg_pin_assistant_1",
++      parentID: "msg_pin_user_1",
++      created: 1700000002000,
++    },
++  )
++
++  const secondUser = userMessage([userText("Now let's work on item 1", { id: "prt_pin_user_2" })], {
++    id: "msg_pin_user_2",
++    created: 1700000003000,
++  })
++
++  const secondAssistant = assistantMessage(
++    [{ id: "prt_pin_assistant_2", type: "text", text: "Working on schema details." }],
++    {
++      id: "msg_pin_assistant_2",
++      parentID: "msg_pin_user_2",
++      created: 1700000004000,
++    },
++  )
++
++  await setupTimeline(page, {
++    viewport: { width: 1400, height: 900 },
++    messages: [firstUser, firstAssistant, secondUser, secondAssistant],
++  })
++
++  const pinnedPanel = page.locator('[data-component="session-pinned-panel"]')
++  await expect(pinnedPanel).toHaveCount(0)
++
++  const firstTurnResponse = page.locator('[data-timeline-part-id="msg_pin_assistant_1:text:0"]')
++  await firstTurnResponse.hover()
++  await firstTurnResponse.getByRole("button", { name: "Pin to left", exact: true }).click()
++
++  await expect(pinnedPanel).toBeVisible()
++  await expect(pinnedPanel.getByText("Give me the implementation checklist", { exact: true })).toBeVisible()
++  await expect(pinnedPanel.getByText("Design schema", { exact: true })).toBeVisible()
++  await expect(pinnedPanel.getByText("Wire UI", { exact: true })).toBeVisible()
++  await expect(pinnedPanel).not.toContainText("Working on schema details.")
++
++  await pinnedPanel.locator('[data-slot="session-pinned-header"]').getByRole("button", { name: "Unpin message", exact: true }).click()
++  await expect(pinnedPanel).toHaveCount(0)
++})
++
+ function pauseExitAnimations(locator: Locator) {
+   return locator.evaluateHandle((element) => {
+     const animations: Animation[] = []
+diff --git a/packages/app/src/runtime/i18n/en.ts b/packages/app/src/runtime/i18n/en.ts
+index 4868b30911..095bbd8800 100644
+--- a/packages/app/src/runtime/i18n/en.ts
++++ b/packages/app/src/runtime/i18n/en.ts
+@@ -305,6 +305,10 @@ export const dict = {
+   "prompt.mode.normal": "Prompt",
+   "session.child.promptDisabled": "Subagent sessions cannot be prompted.",
+   "session.child.backToParent": "Back to main session.",
++  "session.pinned.title": "Pinned",
++  "session.pinned.jumpToMessage": "Jump to message in timeline",
++  "session.pinned.unpin": "Unpin message",
++  "session.pinned.clearAll": "Clear all pinned",
+ 
+   "prompt.action.attachFile": "Add files",
+ 
+diff --git a/packages/app/src/runtime/i18n/zh.ts b/packages/app/src/runtime/i18n/zh.ts
+index b7d19c1b34..1ac92b37e6 100644
+--- a/packages/app/src/runtime/i18n/zh.ts
++++ b/packages/app/src/runtime/i18n/zh.ts
+@@ -295,6 +295,10 @@ export const dict = {
+   "prompt.mode.normal": "Prompt",
+   "session.child.promptDisabled": "无法向子智能体会话发送提示词。",
+   "session.child.backToParent": "返回主会话。",
++  "session.pinned.title": "已固定问答",
++  "session.pinned.jumpToMessage": "定位到对话位置",
++  "session.pinned.unpin": "取消固定",
++  "session.pinned.clearAll": "全部取消固定",
+   "prompt.action.attachFile": "附加文件",
+   "prompt.toast.attachmentDuplicate.title": "此文件已上传",
+   "prompt.toast.uploading.percent": "{{percent}}%",
+diff --git a/packages/app/src/session/composer/region.tsx b/packages/app/src/session/composer/region.tsx
+index 072f61caf1..816d27a57b 100644
+--- a/packages/app/src/session/composer/region.tsx
++++ b/packages/app/src/session/composer/region.tsx
+@@ -280,6 +280,10 @@ export function createActiveSessionRegion(input: {
+ 
+           return pendingSteer
+         },
++        pin: {
++          isPinned: (messageID: string) => input.session.layout.view().pin.isPinned(messageID),
++          toggle: ({ messageID }) => input.session.layout.view().pin.toggle(messageID),
++        },
+         openAttachment,
+       } satisfies SessionUserActions,
+     },
+diff --git a/packages/app/src/session/pinned-panel.tsx b/packages/app/src/session/pinned-panel.tsx
+new file mode 100644
+index 0000000000..84299b776a
+--- /dev/null
++++ b/packages/app/src/session/pinned-panel.tsx
+@@ -0,0 +1,260 @@
++import type { SessionMessageInfo } from "@opencode/client/promise"
++import { For, Show, createMemo } from "solid-js"
++import { createStore } from "solid-js/store"
++import { Icon } from "@opencode/ui/icon"
++import { IconButton } from "@opencode/ui/icon-button"
++import { Tooltip } from "@opencode/ui/tooltip"
++import {
++  createReactiveTimelineProjection,
++  TimelineRow,
++  type ReasoningMode,
++} from "@opencode/session-ui/timeline/projection"
++import { createSessionTimelineRowRenderer } from "@opencode/session-ui/timeline/row"
++import { parseCommentNote, readPromptPresentation } from "@/composer/comment-note"
++import { useLanguage } from "@/runtime/i18n/language"
++import { useSettings } from "@/settings/model"
++import type { SessionModel } from "./model"
++import { SessionPanelFrame } from "./session-frame"
++
++function selectTurnMessages(messages: SessionMessageInfo[], turnID: string): SessionMessageInfo[] {
++  const start = messages.findIndex((msg) => msg.id === turnID)
++
++  if (start === -1) return []
++  const first = messages[start]!
++
++  if (first.type === "shell") return [first]
++  const slice: SessionMessageInfo[] = [first]
++
++  for (let i = start + 1; i < messages.length; i++) {
++    const current = messages[i]!
++
++    if (current.type === "user" || current.type === "shell") break
++    slice.push(current)
++  }
++
++  return slice
++}
++
++function summarizeTurnLabel(messages: SessionMessageInfo[], turnID: string, fallbackIndex: number): string {
++  const target = messages.find((msg) => msg.id === turnID)
++
++  if (target?.type === "user") {
++    const presentation = readPromptPresentation(target.metadata)
++    const raw = (presentation?.displayText ?? target.text).replace(/\s+/g, " ").trim()
++
++    if (raw) return raw.length > 28 ? `${raw.slice(0, 28)}…` : raw
++  }
++
++  return `#${fallbackIndex + 1}`
++}
++
++export function SessionPinnedPanel(props: {
++  session: SessionModel
++  onRevealMessage?: (messageID: string) => void
++}) {
++  const language = useLanguage()
++  const settings = useSettings()
++  const pin = () => props.session.layout.view().pin
++  const items = createMemo(() => pin().items())
++  const activeID = createMemo(() => pin().active())
++
++  const turnMessages = createMemo(() => {
++    const id = activeID()
++
++    if (!id) return []
++
++    return selectTurnMessages(props.session.history.messages(), id)
++  })
++
++  const timelineDetail = createMemo(() => {
++    const detail = settings.general.timelineDetail()
++
++    return {
++      shell: { ...detail.shell },
++      edit: { ...detail.edit },
++      thinking: { ...detail.thinking },
++      subagents: { ...detail.subagents },
++      notices: { ...detail.notices },
++      tools: { ...detail.tools },
++    }
++  })
++
++  const reasoningMode = (): ReasoningMode =>
++    timelineDetail().thinking.placement === "hidden"
++      ? "hidden"
++      : timelineDetail().thinking.details === "expanded"
++        ? "full"
++        : "compact"
++
++  const shellToolDefaultOpen = () => timelineDetail().shell.details === "expanded"
++  const editToolDefaultOpen = () => timelineDetail().edit.details === "expanded"
++
++  const projection = createReactiveTimelineProjection({
++    sessionMessages: turnMessages,
++    status: () => ({ type: "idle" as const }),
++    reasoningMode,
++    shellToolDefaultOpen,
++    editToolDefaultOpen,
++    timelineDetail,
++  })
++
++  const [disclosure, setDisclosure] = createStore<Record<string, boolean | undefined>>({})
++
++  const rowRenderer = createSessionTimelineRowRenderer({
++    sessionID: () => props.session.identity.sessionID() ?? "",
++    status: () => ({ type: "idle" as const }),
++    projection,
++    presentation: (message) => {
++      const value = readPromptPresentation(message.metadata)
++      const parsed = value ? undefined : parseCommentNote(message.text)
++
++      return {
++        displayText: value?.displayText,
++        comments: value?.comments ?? (parsed ? [parsed] : []),
++        references: value?.attachments,
++      }
++    },
++    actions: {
++      pin: {
++        isPinned: (messageID: string) => pin().isPinned(messageID),
++        toggle: ({ messageID }) => pin().toggle(messageID),
++      },
++    },
++    reasoningMode,
++    shellToolDefaultOpen,
++    editToolDefaultOpen,
++    timelineDetail,
++    disclosure: {
++      value: (key) => disclosure[key],
++      set: (key, open) => setDisclosure(key, open),
++    },
++    centered: () => false,
++    padding: () => "px-4",
++  })
++
++  const rowKeys = createMemo(() => projection.rows().map(TimelineRow.key))
++
++  function Row(rowProps: { rowKey: string }) {
++    const initial = projection.rowByKey().get(rowProps.rowKey)!
++    const row = createMemo(() => projection.rowByKey().get(rowProps.rowKey) ?? initial)
++
++    return <rowRenderer.Row row={row} />
++  }
++
++  return (
++    <SessionPanelFrame raised>
++      <div
++        data-component="session-pinned-panel"
++        class="flex h-full min-h-0 w-full flex-col overflow-hidden bg-v2-background-bg-base"
++      >
++        <div
++          data-slot="session-pinned-header"
++          class="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-v2-border-border-weak px-3.5"
++        >
++          <div class="flex min-w-0 items-center gap-2">
++            <span class="flex size-5 shrink-0 items-center justify-center text-v2-icon-icon-base">
++              <Icon name="pin-active" size="small" />
++            </span>
++            <span class="truncate text-[13px] font-[530] leading-4 tracking-[-0.04px] text-v2-text-text-base">
++              {language.t("session.pinned.title")}
++            </span>
++            <Show when={items().length > 1}>
++              <span class="rounded-[4px] bg-v2-background-bg-layer-01 px-1.5 py-0.5 text-[11px] font-[500] leading-4 text-v2-text-text-muted tabular-nums">
++                {items().indexOf(activeID() ?? "") + 1}/{items().length}
++              </span>
++            </Show>
++          </div>
++          <div class="flex shrink-0 items-center gap-1">
++            <Show when={activeID() && props.onRevealMessage}>
++              <Tooltip appearance="compact" value={language.t("session.pinned.jumpToMessage")} placement="bottom">
++                <IconButton
++                  icon={<Icon name="magnifying-glass" size="small" />}
++                  size="normal"
++                  variant="ghost-muted"
++                  aria-label={language.t("session.pinned.jumpToMessage")}
++                  onClick={() => {
++                    const id = activeID()
++
++                    if (id) props.onRevealMessage?.(id)
++                  }}
++                />
++              </Tooltip>
++            </Show>
++            <Show when={items().length > 1}>
++              <Tooltip appearance="compact" value={language.t("session.pinned.clearAll")} placement="bottom">
++                <IconButton
++                  icon={<Icon name="outline-trash" size="small" />}
++                  size="normal"
++                  variant="ghost-muted"
++                  aria-label={language.t("session.pinned.clearAll")}
++                  onClick={() => pin().clear()}
++                />
++              </Tooltip>
++            </Show>
++            <Tooltip appearance="compact" value={language.t("session.pinned.unpin")} placement="bottom">
++              <IconButton
++                icon={<Icon name="close-small" size="small" />}
++                size="normal"
++                variant="ghost-muted"
++                aria-label={language.t("session.pinned.unpin")}
++                onClick={() => {
++                  const id = activeID()
++
++                  if (id) pin().remove(id)
++                }}
++              />
++            </Tooltip>
++          </div>
++        </div>
++
++        <Show when={items().length > 1}>
++          <div
++            data-slot="session-pinned-tabs"
++            class="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-v2-border-border-weak px-3 py-1.5 no-scrollbar"
++          >
++            <For each={items()}>
++              {(itemID, index) => {
++                const selected = () => activeID() === itemID
++                const label = createMemo(() => summarizeTurnLabel(props.session.history.messages(), itemID, index()))
++
++                return (
++                  <div
++                    class="group flex shrink-0 items-center gap-1 rounded-[6px] pl-2.5 pr-1 py-1 text-[12px] leading-4 transition-colors cursor-pointer select-none"
++                    classList={{
++                      "bg-v2-background-bg-layer-02 text-v2-text-text-base font-[530]": selected(),
++                      "text-v2-text-text-muted hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base":
++                        !selected(),
++                    }}
++                    onClick={() => pin().select(itemID)}
++                  >
++                    <span class="max-w-[160px] truncate">{label()}</span>
++                    <button
++                      type="button"
++                      class="flex size-4 items-center justify-center rounded-[4px] text-v2-icon-icon-muted opacity-60 hover:bg-v2-overlay-simple-overlay-pressed hover:opacity-100"
++                      aria-label={language.t("session.pinned.unpin")}
++                      onClick={(event) => {
++                        event.stopPropagation()
++                        pin().remove(itemID)
++                      }}
++                    >
++                      <Icon name="close-small" size="small" />
++                    </button>
++                  </div>
++                )
++              }}
++            </For>
++          </div>
++        </Show>
++
++        <div
++          data-slot="session-pinned-scroll"
++          class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden py-4 select-text"
++        >
++          <div class="flex flex-col pb-6">
++            <For each={rowKeys()}>{(rowKey) => <Row rowKey={rowKey} />}</For>
++          </div>
++        </div>
++      </div>
++    </SessionPanelFrame>
++  )
++}
+diff --git a/packages/app/src/session/screen-layout.ts b/packages/app/src/session/screen-layout.ts
+index e276143b34..c98ff6036c 100644
+--- a/packages/app/src/session/screen-layout.ts
++++ b/packages/app/src/session/screen-layout.ts
+@@ -26,6 +26,9 @@ export function createSessionScreenLayout(
+     () => session.isDesktop() && input.sidebar() && settings.visibility.fileTree() && layout.fileTree.opened(),
+   )
+ 
++  const pinOpen = createMemo(() => session.isDesktop() && view().pin.items().length > 0 && !!session.identity.params.id)
++  const pinWidth = createMemo(() => (pinOpen() ? view().pin.width() : 0))
++
+   const resizable = createMemo(() => tabsOpen() || dockSideOpen())
+   const besideOpen = createMemo(() => resizable() || fileTreeOpen())
+   const [rowSize, setRowSize] = createStore<{ width?: number; height?: number }>({})
+@@ -40,7 +43,7 @@ export function createSessionScreenLayout(
+ 
+     if (width === undefined) return undefined
+ 
+-    return width - 8
++    return Math.max(0, width - 8 - (pinOpen() ? pinWidth() + 8 : 0))
+   })
+ 
+   const splitSide = createMemo(() => tabsOpen() && input.wide())
+@@ -54,11 +57,15 @@ export function createSessionScreenLayout(
+   )
+ 
+   const panelWidth = createMemo(() => {
+-    if (!besideOpen()) return "100%"
++    const pinOffset = pinOpen() ? `${pinWidth() + 8}px` : undefined
++
++    if (!besideOpen()) return pinOffset ? `calc(100% - ${pinOffset})` : "100%"
+ 
+     if (resizable()) return `${resizedWidth()}px`
+ 
+-    return `calc(100% - ${layout.fileTree.width()}px)`
++    return pinOffset
++      ? `calc(100% - ${layout.fileTree.width()}px - ${pinOffset})`
++      : `calc(100% - ${layout.fileTree.width()}px)`
+   })
+ 
+   const panelMax = createMemo(() => {
+@@ -113,6 +120,10 @@ export function createSessionScreenLayout(
+   return {
+     centered: createMemo(() => session.isDesktop()),
+     files: { open: fileTreeOpen },
++    pin: {
++      open: pinOpen,
++      width: createMemo(() => view().pin.width()),
++    },
+     panel: {
+       max: panelMax,
+       ref: (element: HTMLDivElement) => {
+diff --git a/packages/app/src/session/screen.tsx b/packages/app/src/session/screen.tsx
+index 8080d7afe8..25c484d3dc 100644
+--- a/packages/app/src/session/screen.tsx
++++ b/packages/app/src/session/screen.tsx
+@@ -36,6 +36,7 @@ import { ActiveSessionComposerRegion, createActiveSessionRegion } from "./compos
+ import { SessionIdentityHeader } from "./session-identity-header"
+ import { SessionReviewToggle } from "./header/session-header-actions"
+ import { SessionRunningMenu } from "./header/session-running-menu"
++import { SessionPinnedPanel } from "./pinned-panel"
+ import { createAnimatedPresence } from "@/runtime/animated-presence"
+ import { createTimelineCache } from "./timeline/cache"
+ 
+@@ -380,6 +381,28 @@ function SessionScreenContent(props: {
+               <SessionReviewToggle />
+             </div>
+           </Show>
++          <Show when={screen.pin.open() && messagesReady()}>
++            <div
++              data-slot="session-pinned-panel-container"
++              class="relative z-10 min-w-0 shrink-0 flex flex-col min-h-0 h-full"
++              style={{ width: `${screen.pin.width()}px` }}
++            >
++              <SessionPinnedPanel session={session} onRevealMessage={timeline.actions.revealMessage} />
++              <div onPointerDown={() => screen.size.start()}>
++                <ResizeHandle
++                  class="-end-1"
++                  direction="horizontal"
++                  size={screen.pin.width()}
++                  min={280}
++                  max={720}
++                  onResize={(width) => {
++                    screen.size.touch()
++                    session.layout.view().pin.resize(width)
++                  }}
++                />
++              </div>
++            </div>
++          </Show>
+           <div
+             classList={{
+               "@container relative z-10 min-w-0 shrink-0 flex flex-col min-h-0 h-full flex-1 md:flex-none transition-[width]": true,
+diff --git a/packages/app/src/shell/state/layout.tsx b/packages/app/src/shell/state/layout.tsx
+index 77686c6cec..0e718cd255 100644
+--- a/packages/app/src/shell/state/layout.tsx
++++ b/packages/app/src/shell/state/layout.tsx
+@@ -24,6 +24,8 @@ const DEFAULT_SESSION_WIDTH = 600
+ 
+ const DEFAULT_DOCK_HEIGHT = 280
+ 
++const DEFAULT_PIN_WIDTH = 420
++
+ export type LocalProject = Partial<Project> & { worktree: string; expanded: boolean }
+ 
+ export type HomeProjectSelection = typeof layoutSchema.Type.home.selection
+@@ -94,6 +96,9 @@ const sessionViewSchema = Persistence.struct({
+   reviewFile: Schema.optional(Schema.String),
+   pendingMessage: Schema.optional(Schema.String),
+   pendingMessageAt: Schema.optional(Schema.Finite),
++  pinnedMessages: Schema.optional(Persistence.array(Schema.String)),
++  activePinnedMessage: Schema.optional(Schema.String),
++  pinWidth: Schema.optional(Schema.Finite),
+ })
+ 
+ export const layoutSchema = Persistence.struct({
+@@ -521,6 +526,116 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
+             width: createMemo(() => regions.sessionWidth() ?? DEFAULT_SESSION_WIDTH),
+             resize: regions.setSessionWidth,
+           },
++          pin: {
++            items: createMemo(() => store.sessionView[key()]?.pinnedMessages ?? []),
++            active: createMemo(() => {
++              const entry = store.sessionView[key()]
++              const items = entry?.pinnedMessages ?? []
++
++              if (items.length === 0) return undefined
++
++              return entry?.activePinnedMessage && items.includes(entry.activePinnedMessage)
++                ? entry.activePinnedMessage
++                : items.at(-1)
++            }),
++            width: createMemo(() => store.sessionView[key()]?.pinWidth ?? DEFAULT_PIN_WIDTH),
++            isPinned(messageID: string) {
++              return (store.sessionView[key()]?.pinnedMessages ?? []).includes(messageID)
++            },
++            select(messageID: string) {
++              const session = key()
++              touch(session)
++              const current = store.sessionView[session]
++
++              if (!current) return
++              setStore("sessionView", session, "activePinnedMessage", messageID)
++            },
++            toggle(messageID: string) {
++              const session = key()
++              touch(session)
++              const current = store.sessionView[session]
++
++              if (!current) {
++                setStore("sessionView", session, {
++                  scroll: {},
++                  pinnedMessages: [messageID],
++                  activePinnedMessage: messageID,
++                })
++                prune(usage.active ?? session)
++
++                return
++              }
++
++              setStore(
++                "sessionView",
++                session,
++                produce((draft) => {
++                  const list = draft.pinnedMessages ? [...draft.pinnedMessages] : []
++                  const index = list.indexOf(messageID)
++
++                  if (index !== -1) {
++                    list.splice(index, 1)
++                    draft.pinnedMessages = list.length > 0 ? list : undefined
++
++                    if (draft.activePinnedMessage === messageID) {
++                      draft.activePinnedMessage = list.at(-1)
++                    }
++
++                    return
++                  }
++
++                  list.push(messageID)
++                  draft.pinnedMessages = list
++                  draft.activePinnedMessage = messageID
++                }),
++              )
++            },
++            remove(messageID: string) {
++              const session = key()
++              const current = store.sessionView[session]
++
++              if (!current?.pinnedMessages?.includes(messageID)) return
++              setStore(
++                "sessionView",
++                session,
++                produce((draft) => {
++                  const list = (draft.pinnedMessages ?? []).filter((id) => id !== messageID)
++                  draft.pinnedMessages = list.length > 0 ? list : undefined
++
++                  if (draft.activePinnedMessage === messageID) {
++                    draft.activePinnedMessage = list.at(-1)
++                  }
++                }),
++              )
++            },
++            clear() {
++              const session = key()
++              const current = store.sessionView[session]
++
++              if (!current?.pinnedMessages?.length) return
++              setStore(
++                "sessionView",
++                session,
++                produce((draft) => {
++                  delete draft.pinnedMessages
++                  delete draft.activePinnedMessage
++                }),
++              )
++            },
++            resize(width: number) {
++              const session = key()
++              const clamped = Math.max(280, Math.min(720, Math.round(width)))
++              const current = store.sessionView[session]
++
++              if (!current) {
++                setStore("sessionView", session, { scroll: {}, pinWidth: clamped })
++
++                return
++              }
++
++              setStore("sessionView", session, "pinWidth", clamped)
++            },
++          },
+         }
+       },
+       /** Side panel tabs for any session key, mounted or not. Reads are reactive. */
+diff --git a/packages/session-ui/src/actions.ts b/packages/session-ui/src/actions.ts
+index a78ad656a5..30e42b0df6 100644
+--- a/packages/session-ui/src/actions.ts
++++ b/packages/session-ui/src/actions.ts
+@@ -28,6 +28,10 @@ export type SessionUserAttachmentReference = {
+ export type SessionUserActions = {
+   openAttachment?: (file: PromptFileAttachment) => void
+   revert?: (input: { sessionID: string; messageID: string }) => Promise<void> | void
++  pin?: {
++    isPinned: (messageID: string) => boolean
++    toggle: (input: { sessionID: string; messageID: string }) => void
++  }
+   /**
+    * An input the server has not delivered yet. Like the TUI, a pending steer can move to the queue or be deleted;
+    * it shows as waiting only while `steering` behind delivered work or `stranded` by an execution that ended.
+diff --git a/packages/session-ui/src/components/message-part.css b/packages/session-ui/src/components/message-part.css
+index a664991d34..3e7178a1af 100644
+--- a/packages/session-ui/src/components/message-part.css
++++ b/packages/session-ui/src/components/message-part.css
+@@ -223,7 +223,8 @@
+   }
+ 
+   &:hover [data-slot="user-message-copy-wrapper"],
+-  &:focus-within [data-slot="user-message-copy-wrapper"] {
++  &:focus-within [data-slot="user-message-copy-wrapper"],
++  [data-slot="user-message-copy-wrapper"]:has([aria-pressed="true"]) {
+     opacity: 1;
+     pointer-events: auto;
+   }
+@@ -277,7 +278,8 @@
+   }
+ 
+   &:hover [data-slot="text-part-copy-wrapper"],
+-  &:focus-within [data-slot="text-part-copy-wrapper"] {
++  &:focus-within [data-slot="text-part-copy-wrapper"],
++  [data-slot="text-part-copy-wrapper"]:has([aria-pressed="true"]) {
+     opacity: 1;
+     pointer-events: auto;
+   }
+diff --git a/packages/session-ui/src/message/current-message.tsx b/packages/session-ui/src/message/current-message.tsx
+index 92baa336aa..0ed7149bdd 100644
+--- a/packages/session-ui/src/message/current-message.tsx
++++ b/packages/session-ui/src/message/current-message.tsx
+@@ -46,6 +46,8 @@ export function SessionAssistantContent(props: {
+   contentID: string
+   showAssistantCopyPartID?: string | null
+   turnDurationMs?: number | null
++  pinned?: boolean
++  onTogglePin?: () => void
+   defaultOpen?: boolean
+   reasoningDefaultOpen?: boolean
+   toolOpen?: boolean
+@@ -62,6 +64,8 @@ export function SessionAssistantContent(props: {
+             message={props.message}
+             showCopy={props.showAssistantCopyPartID === props.contentID}
+             turnDurationMs={props.turnDurationMs}
++            pinned={props.pinned}
++            onTogglePin={props.onTogglePin}
+           />
+         )}
+       </Match>
+diff --git a/packages/session-ui/src/message/message-content.tsx b/packages/session-ui/src/message/message-content.tsx
+index 73dc2ffd5b..b1226219b5 100644
+--- a/packages/session-ui/src/message/message-content.tsx
++++ b/packages/session-ui/src/message/message-content.tsx
+@@ -84,9 +84,10 @@ function modelLabel(
+ }
+ 
+ function MessageActionButton(
+-  props: Pick<ComponentProps<"button">, "disabled" | "onMouseDown" | "onClick" | "aria-label"> & {
+-    icon: "check" | "copy" | "reset" | "arrow-down-to-line" | "outline-trash"
++  props: Pick<ComponentProps<"button">, "disabled" | "onMouseDown" | "onClick" | "aria-label" | "aria-pressed"> & {
++    icon: "check" | "copy" | "reset" | "arrow-down-to-line" | "outline-trash" | "pin" | "pin-active"
+     label: JSX.Element
++    active?: boolean
+   },
+ ) {
+   const icon = () => (props.icon === "copy" ? "outline-copy" : props.icon)
+@@ -97,10 +98,12 @@ function MessageActionButton(
+         icon={<Icon name={icon()} size="small" />}
+         size="normal"
+         variant="ghost-muted"
++        state={props.active ? "pressed" : undefined}
+         disabled={props.disabled}
+         onMouseDown={props.onMouseDown}
+         onClick={props.onClick}
+         aria-label={props["aria-label"]}
++        aria-pressed={props["aria-pressed"]}
+       />
+     </Tooltip>
+   )
+@@ -440,6 +443,28 @@ export function CurrentUserMessageDisplay(props: {
+               aria-label={i18n.t("ui.message.deletePending")}
+             />
+           </Show>
++          <Show when={props.actions?.pin && !pending()}>
++            <MessageActionButton
++              icon={props.actions?.pin?.isPinned(props.message.id) ? "pin-active" : "pin"}
++              active={props.actions?.pin?.isPinned(props.message.id)}
++              label={
++                props.actions?.pin?.isPinned(props.message.id)
++                  ? i18n.t("ui.message.unpin")
++                  : i18n.t("ui.message.pin")
++              }
++              onMouseDown={(event) => event.preventDefault()}
++              onClick={(event) => {
++                event.stopPropagation()
++                props.actions?.pin?.toggle({ sessionID: props.sessionID, messageID: props.message.id })
++              }}
++              aria-label={
++                props.actions?.pin?.isPinned(props.message.id)
++                  ? i18n.t("ui.message.unpin")
++                  : i18n.t("ui.message.pin")
++              }
++              aria-pressed={props.actions?.pin?.isPinned(props.message.id)}
++            />
++          </Show>
+           <Show when={props.actions?.revert && !pending()}>
+             <MessageActionButton
+               icon="reset"
+@@ -660,6 +685,8 @@ export function AssistantTextContent(props: {
+   message: SessionMessageAssistant
+   showCopy: boolean
+   turnDurationMs?: number | null
++  pinned?: boolean
++  onTogglePin?: () => void
+ }) {
+   const data = useData()
+   const i18n = useI18n()
+@@ -734,6 +761,20 @@ export function AssistantTextContent(props: {
+               onClick={copy}
+               aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
+             />
++            <Show when={props.onTogglePin}>
++              <MessageActionButton
++                icon={props.pinned ? "pin-active" : "pin"}
++                active={props.pinned}
++                label={props.pinned ? i18n.t("ui.message.unpin") : i18n.t("ui.message.pin")}
++                onMouseDown={(event) => event.preventDefault()}
++                onClick={(event) => {
++                  event.stopPropagation()
++                  props.onTogglePin?.()
++                }}
++                aria-label={props.pinned ? i18n.t("ui.message.unpin") : i18n.t("ui.message.pin")}
++                aria-pressed={props.pinned}
++              />
++            </Show>
+             <Show when={meta()}>
+               <span data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
+                 {meta()}
+diff --git a/packages/session-ui/src/timeline/session-timeline-row.tsx b/packages/session-ui/src/timeline/session-timeline-row.tsx
+index 02f3d69e02..8052c0bbc5 100644
+--- a/packages/session-ui/src/timeline/session-timeline-row.tsx
++++ b/packages/session-ui/src/timeline/session-timeline-row.tsx
+@@ -368,6 +368,16 @@ export function createSessionTimelineRowRenderer(input: {
+                 contentID={ref()!.partID}
+                 showAssistantCopyPartID={copyContentID(row().userMessageID)}
+                 turnDurationMs={duration(row().userMessageID)}
++                pinned={input.actions?.pin?.isPinned(row().userMessageID)}
++                onTogglePin={
++                  input.actions?.pin
++                    ? () =>
++                        input.actions?.pin?.toggle({
++                          sessionID: input.sessionID(),
++                          messageID: row().userMessageID,
++                        })
++                    : undefined
++                }
+                 defaultOpen={defaultOpen()}
+                 toolOpen={input.disclosure.value(disclosureKey()) ?? defaultOpen()}
+                 onToolOpenChange={(open) => input.disclosure.set(disclosureKey(), open)}
+diff --git a/packages/ui/src/i18n/en.ts b/packages/ui/src/i18n/en.ts
+index 920179a5c0..9db144fabc 100644
+--- a/packages/ui/src/i18n/en.ts
++++ b/packages/ui/src/i18n/en.ts
+@@ -247,6 +247,8 @@ const source = {
+   "ui.message.pending": "Pending",
+   "ui.message.deletePending": "Delete",
+   "ui.message.copyResponse": "Copy response",
++  "ui.message.pin": "Pin to left",
++  "ui.message.unpin": "Unpin from left",
+   "ui.message.copied": "Copied",
+   "ui.message.thought": "Thought",
+   "ui.message.duration.seconds": "{{count}}s",
+diff --git a/packages/ui/src/i18n/zh.ts b/packages/ui/src/i18n/zh.ts
+index 6eb6355b1c..5e6b1b1749 100644
+--- a/packages/ui/src/i18n/zh.ts
++++ b/packages/ui/src/i18n/zh.ts
+@@ -188,6 +188,8 @@ export const dict = {
+   "ui.message.forkMessage": "从此消息创建新会话",
+   "ui.message.revertMessage": "撤销此消息",
+   "ui.message.copyResponse": "复制回复",
++  "ui.message.pin": "固定到左侧",
++  "ui.message.unpin": "取消左侧固定",
+   "ui.message.copied": "已复制！",
+   "ui.message.interrupted": "已中断",
+   "ui.message.queued": "排队中",
+diff --git a/packages/ui/src/icons/catalog.ts b/packages/ui/src/icons/catalog.ts
+index cb33717a91..799af06347 100644
+--- a/packages/ui/src/icons/catalog.ts
++++ b/packages/ui/src/icons/catalog.ts
+@@ -186,6 +186,14 @@ const icons = {
+     viewBox: "0 0 16 16",
+     body: `<path d="M4.14908 11.0081H1.76282V1.51758H9.1038V2.55588M14.2225 4.99681H6.75397V14.4873H14.2225V4.99681Z" stroke="currentColor"/>`,
+   },
++  pin: {
++    viewBox: "0 0 16 16",
++    body: `<path d="M4.5 2.5H11.5M5.5 2.5V6.5L3.5 9V10.25H12.5V9L10.5 6.5V2.5M8 10.25V14.25" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round"/>`,
++  },
++  "pin-active": {
++    viewBox: "0 0 16 16",
++    body: `<path d="M5.5 2.5H10.5V6.5L12.5 9V10.25H3.5V9L5.5 6.5V2.5Z" fill="currentColor" fill-opacity="0.22"/><path d="M4.5 2.5H11.5M5.5 2.5V6.5L3.5 9V10.25H12.5V9L10.5 6.5V2.5M8 10.25V14.25" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round"/>`,
++  },
+   "outline-arrow-left": {
+     viewBox: "0 0 16 16",
+     body: `<path d="M2.44442 7.99999H13.5555M6.22221 4.22222L2.44442 7.99999L6.22221 11.7778" stroke="currentColor"/>`,
+-- 
+2.50.1 (Apple Git-155)
+
