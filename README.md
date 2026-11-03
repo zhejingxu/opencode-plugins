@@ -18,7 +18,7 @@ the upstream requests that would let them become plugins too.
 ## New machine
 
 ```sh
-git clone https://github.com/<you>/opencode-plugins.git ~/Documents/ChatGPT/opencode-plugins
+git clone https://github.com/zhejingxu/opencode-plugins.git ~/Documents/ChatGPT/opencode-plugins
 ~/Documents/ChatGPT/opencode-plugins/scripts/install.sh            # symlinks plugins into ~/.config/opencode/plugins
 # only if you run OpenCode from source and want the UI patches:
 ~/Documents/ChatGPT/opencode-plugins/scripts/apply-patches.sh ~/Documents/ChatGPT/opencode

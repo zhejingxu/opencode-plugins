@@ -28,5 +28,5 @@ Each check costs one small model request.
 # local checkout (hot-reloads on edit)
 scripts/install.sh
 # or from Git
-opencode plugin add 'git+https://github.com/<you>/opencode-plugins.git#path:packages/model-health'
+opencode plugin add 'git+https://github.com/zhejingxu/opencode-plugins.git#path:packages/model-health'
 ```

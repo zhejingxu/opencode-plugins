@@ -1,5 +1,5 @@
 From b05a191bfc34e8345ef7150ad4e2169706c1050f Mon Sep 17 00:00:00 2001
-From: xuzhejing <xuzhejing@bytedance.com>
+From: zhejingxu <6896703+zhejingxu@users.noreply.github.com>
 Date: Tue, 3 Nov 2026 09:57:30 +0800
 Subject: [PATCH 3/3] feat(app): show model health from the model-health plugin
  in the model selector

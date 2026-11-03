@@ -1,0 +1,597 @@
+From 49ddfd25048dfda0731743a5acaa3382206ae42f Mon Sep 17 00:00:00 2001
+From: zhejingxu <6896703+zhejingxu@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 09:55:14 +0800
+Subject: [PATCH] feat(session-ui,tui): collapse compaction summaries by
+ default
+
+Closes #48596
+---
+ .../e2e/regression/timeline-stream.spec.ts    | 54 ++++++-----
+ .../session-compaction.spec.ts                | 28 ++++--
+ .../src/components/message-part.css           | 54 ++++++++++-
+ .../src/message/message-content.tsx           | 93 +++++++++++++------
+ .../src/timeline/session-timeline-row.tsx     | 20 +++-
+ .../src/timeline/timeline-row.stories.tsx     |  4 +-
+ packages/tui/src/routes/session/index.tsx     | 65 +++++++++----
+ packages/tui/test/app-lifecycle.test.tsx      |  9 +-
+ 8 files changed, 236 insertions(+), 91 deletions(-)
+
+diff --git a/packages/app/e2e/regression/timeline-stream.spec.ts b/packages/app/e2e/regression/timeline-stream.spec.ts
+index 2d4ff7b5a6..ae3f90f7f4 100644
+--- a/packages/app/e2e/regression/timeline-stream.spec.ts
++++ b/packages/app/e2e/regression/timeline-stream.spec.ts
+@@ -1564,30 +1564,33 @@ test.describe("compaction", () => {
+ 
+     await timeline.send(compactionStarted({ sessionID, reason: "manual", recent: "" }))
+     const compaction = page.locator('[data-component="session-compaction-message"]')
+-    await expect(compaction.getByText("Session compaction started", { exact: true })).toBeVisible()
+-    await expect(compaction.getByRole("status").getByLabel("Compacting", { exact: true })).toBeVisible()
++    const trigger = compaction.locator('[data-slot="collapsible-trigger"]')
++    const running = compaction.getByRole("status").getByLabel("Compacting", { exact: true })
++    await expect(running).toBeVisible()
+     await expect(compaction.locator('[data-component="text-shimmer"]')).toHaveAttribute("data-active", "true")
++    await expect(compaction.locator('[data-slot="collapsible-arrow"]')).toHaveCount(0)
+     await expect(compaction.getByText("Session compacted", { exact: true })).toHaveCount(0)
+     await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible()
+     await expect(page.locator('[data-component="session-working"]')).toHaveCount(0)
+ 
+     await page.setViewportSize({ width: 480, height: 900 })
+-    await expect(compaction.getByText("Session compaction started", { exact: true })).toBeInViewport()
++    await expect(running).toBeInViewport()
+ 
+     await timeline.send(compactionDelta({ sessionID, text: "## Checkpoint\n\nStreamed implementation details." }))
++    await expect(trigger).toHaveAttribute("aria-expanded", "false")
++    await expect(compaction.locator('[data-slot="basic-tool-tool-subtitle"]')).toHaveText("Checkpoint")
++    await expect(compaction).not.toContainText("Streamed implementation details.")
++    await expect(running).toBeVisible()
++    await expect(compaction.getByText("Session compacted", { exact: true })).toHaveCount(0)
++
++    await trigger.click()
++    await expect(trigger).toHaveAttribute("aria-expanded", "true")
+     await expect(compaction.getByRole("heading", { name: "Checkpoint" })).toBeVisible()
+     await expect(compaction).toContainText("Streamed implementation details.")
+-    const running = compaction.getByRole("status").getByLabel("Compacting", { exact: true })
+-    await expect(running).toBeVisible()
+-    await expect
+-      .poll(async () => {
+-        const summary = await compaction.locator('[data-component="text-part"]').boundingBox()
+-        const status = await running.boundingBox()
+ 
+-        return !!summary && !!status && status.y >= summary.y + summary.height
+-      })
+-      .toBe(true)
+-    await expect(compaction.getByText("Session compacted", { exact: true })).toHaveCount(0)
++    await trigger.click()
++    await expect(trigger).toHaveAttribute("aria-expanded", "false")
++    await expect(compaction).not.toContainText("Streamed implementation details.")
+ 
+     await timeline.send(
+       compactionEnded({
+@@ -1597,21 +1600,17 @@ test.describe("compaction", () => {
+         recent: "",
+       }),
+     )
+-    await expect(compaction).toContainText("Final implementation details.")
+-    await expect(compaction).not.toContainText("Streamed implementation details.")
+-    await expect(compaction.getByText("Session compaction started", { exact: true })).toBeVisible()
+     await expect(compaction.getByText("Session compacted", { exact: true })).toBeVisible()
+-    await expect
+-      .poll(async () => {
+-        const summary = await compaction.locator('[data-component="text-part"]').boundingBox()
+-        const done = await compaction.getByText("Session compacted", { exact: true }).boundingBox()
+-
+-        return !!summary && !!done && done.y >= summary.y + summary.height
+-      })
+-      .toBe(true)
++    await expect(trigger).toHaveAttribute("aria-expanded", "false")
++    await expect(compaction).not.toContainText("Final implementation details.")
+     await expect(compaction.getByRole("status")).toHaveCount(0)
+     await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible()
+     await expect(page.locator('[data-component="session-working"]')).toBeVisible()
++
++    await trigger.click()
++    await expect(trigger).toHaveAttribute("aria-expanded", "true")
++    await expect(compaction).toContainText("Final implementation details.")
++    await expect(compaction).not.toContainText("Streamed implementation details.")
+   })
+ 
+   test("shows an automatic compaction as one quiet divider with background compaction on", async ({ page }) => {
+@@ -1688,6 +1687,11 @@ test.describe("compaction", () => {
+         await timeline.send(compactionDelta({ sessionID, text: outcome.partial }))
+         await expect(compactions).toHaveCount(index + 1)
+         const compaction = compactions.nth(index)
++        const trigger = compaction.locator('[data-slot="collapsible-trigger"]')
++        await expect(trigger).toHaveAttribute("aria-expanded", "false")
++        await expect(compaction).not.toContainText(outcome.partial)
++        await trigger.click()
++        await expect(trigger).toHaveAttribute("aria-expanded", "true")
+         await expect(compaction).toContainText(outcome.partial)
+ 
+         if (name === "interrupted") {
+@@ -1711,13 +1715,13 @@ test.describe("compaction", () => {
+       for (const [index, name] of names.entries()) {
+         const outcome = outcomes[name]
+         const compaction = compactions.nth(index)
+-        await expect(compaction.getByText("Session compaction started", { exact: true })).toBeVisible()
+         await expect(compaction.getByText(outcome.label, { exact: true })).toBeVisible()
+ 
+         for (const other of labels.filter((label) => label !== outcome.label))
+           await expect(compaction.getByText(other, { exact: true })).toHaveCount(0)
+         await expect(compaction.getByText("Session compacted", { exact: true })).toHaveCount(0)
+         await expect(compaction.getByRole("status")).toHaveCount(0)
++        await expect(compaction.locator('[data-slot="collapsible-arrow"]')).toHaveCount(0)
+         await expect(compaction).not.toContainText(outcome.partial)
+ 
+         if (outcome.shown) await expect(compaction.getByText(outcome.shown, { exact: true })).toBeVisible()
+diff --git a/packages/session-ui/component-tests/session-compaction.spec.ts b/packages/session-ui/component-tests/session-compaction.spec.ts
+index 946d96b182..c3c036b3d6 100644
+--- a/packages/session-ui/component-tests/session-compaction.spec.ts
++++ b/packages/session-ui/component-tests/session-compaction.spec.ts
+@@ -127,44 +127,52 @@ story("warms the label only once the gathering light reaches it", async ({ mount
+   expect(cooled).toEqual([0, 0])
+ })
+ 
+-story("keeps the full record for a running automatic compaction with background compaction off", async ({ mount }) => {
++story("collapses a running automatic compaction with background compaction off", async ({ mount }) => {
+   const timeline = await mount(`${rows}--compaction-in-progress`, { args: { backgroundCompaction: false } })
+   const message = timeline.locator('[data-component="session-compaction-message"]')
+ 
+   await expect(message).not.toHaveAttribute("data-quiet")
+   await expect(message.locator('[data-slot="session-compaction-divider"]')).toHaveCount(0)
+-  await expect(message).toContainText("Session compaction started")
+   await expect(message.getByRole("status")).toBeVisible()
++  await expect(message.locator('[data-slot="collapsible-trigger"]')).toHaveAttribute("aria-expanded", "false")
+ })
+ 
+-story("keeps the full record for a finished automatic compaction with background compaction off", async ({ mount }) => {
++story("collapses a finished automatic compaction with background compaction off", async ({ mount }) => {
+   const timeline = await mount(`${rows}--compaction-and-continuation`, { args: { backgroundCompaction: false } })
+   const message = timeline.locator('[data-component="session-compaction-message"]')
++  const trigger = message.locator('[data-slot="collapsible-trigger"]')
+ 
+   await expect(message).not.toHaveAttribute("data-quiet")
+   await expect(message.locator('[data-slot="session-compaction-divider"]')).toHaveCount(0)
+-  await expect(message).toContainText("Session compaction started")
++  await expect(message).toContainText("Session compacted")
++  await expect(message).toContainText("11.9K in · 508 out")
++  await expect(message).not.toContainText("The Session timeline now consumes current nested assistant content.")
++
++  await trigger.click()
++  await expect(trigger).toHaveAttribute("aria-expanded", "true")
+   await expect(message).toContainText("The Session timeline now consumes current nested assistant content.")
+-  await expect(message).toContainText("Session compacted · 11.9K in · 508 out")
+ })
+ 
+-story("keeps the full record for a manual compaction", async ({ mount }) => {
++story("collapses a manual compaction", async ({ mount }) => {
+   const timeline = await mount(`${rows}--compaction-manual`)
+   const message = timeline.locator('[data-component="session-compaction-message"]')
++  const trigger = message.locator('[data-slot="collapsible-trigger"]')
+ 
+   await expect(message).not.toHaveAttribute("data-quiet")
+-  await expect(message).toContainText("Session compaction started")
++  await expect(message).toContainText("Session compacted")
++  await expect(message).not.toContainText("The Session timeline now consumes current nested assistant content.")
++
++  await trigger.click()
+   await expect(message).toContainText("The Session timeline now consumes current nested assistant content.")
+-  await expect(message).toContainText("Session compacted · 11.9K in · 508 out")
+ })
+ 
+-story("keeps the full record for a failed automatic compaction", async ({ mount }) => {
++story("keeps the outcome and error for a failed automatic compaction", async ({ mount }) => {
+   const timeline = await mount(`${rows}--compaction-failed`)
+   const message = timeline.locator('[data-component="session-compaction-message"]')
+ 
+   await expect(message).not.toHaveAttribute("data-quiet")
+-  await expect(message).toContainText("Session compaction started")
+   await expect(message).toContainText("Session compaction failed")
++  await expect(message.locator('[data-slot="collapsible-arrow"]')).toHaveCount(0)
+   await expect(message.locator('[data-component="card"]')).toContainText(
+     "The provider rejected the compaction request.",
+   )
+diff --git a/packages/session-ui/src/components/message-part.css b/packages/session-ui/src/components/message-part.css
+index 1d3d782da6..7e34c3a3bd 100644
+--- a/packages/session-ui/src/components/message-part.css
++++ b/packages/session-ui/src/components/message-part.css
+@@ -611,8 +611,59 @@
+   }
+ }
+ 
++[data-component="session-compaction-message"]:not([data-quiet]) {
++  width: 100%;
++
++  [data-slot="collapsible-trigger"]:not([data-hide-details="true"]) {
++    cursor: pointer;
++
++    [data-slot="collapsible-arrow"] {
++      opacity: 0.7;
++    }
++
++    &:hover [data-slot="collapsible-arrow"] {
++      opacity: 1;
++    }
++  }
++
++  [data-component="text-part"] {
++    margin-top: 0;
++    margin-inline-start: 2px;
++    padding-inline-start: 12px;
++    border-inline-start: 1.5px solid var(--v2-border-border-muted);
++  }
++
++  [data-component="markdown"] {
++    margin-top: 0;
++    font-style: normal;
++    font-size: 13px;
++    line-height: var(--line-height-base);
++    color: var(--v2-text-text-muted);
++
++    h1,
++    h2,
++    h3,
++    h4,
++    h5,
++    h6 {
++      font-size: 13px;
++      font-weight: var(--font-weight-medium);
++      color: var(--v2-text-text-base);
++      margin-top: 16px;
++      margin-bottom: 6px;
++      line-height: var(--line-height-base);
++    }
++
++    > *:first-child,
++    > [data-markdown-block]:first-child > *:first-child {
++      margin-top: 0;
++    }
++  }
++}
++
+ @media (prefers-color-scheme: dark) {
+-  [data-component="reasoning-part"] [data-component="markdown"] :not(pre) > code {
++  [data-component="reasoning-part"] [data-component="markdown"] :not(pre) > code,
++  [data-component="session-compaction-message"]:not([data-quiet]) [data-component="markdown"] :not(pre) > code {
+     opacity: 0.6;
+   }
+ }
+@@ -1358,6 +1409,7 @@
+ [data-component="user-message"] [data-slot="user-message-text"],
+ [data-component="text-part"],
+ [data-component="reasoning-part"],
++[data-component="session-compaction-message"],
+ [data-component="tool-output"],
+ [data-component="bash-output"],
+ [data-component="edit-content"],
+diff --git a/packages/session-ui/src/message/message-content.tsx b/packages/session-ui/src/message/message-content.tsx
+index f45ca6a3aa..c04cc47cdf 100644
+--- a/packages/session-ui/src/message/message-content.tsx
++++ b/packages/session-ui/src/message/message-content.tsx
+@@ -943,10 +943,22 @@ function CompactionDivider(props: { label: string }) {
+   )
+ }
+ 
+-export function SessionCompactionMessage(props: { message: SessionMessageCompaction; error: string }) {
++export function SessionCompactionMessage(props: {
++  message: SessionMessageCompaction
++  error: string
++  defaultOpen?: boolean
++  open?: boolean
++  onOpenChange?: (open: boolean) => void
++  onContentRendered?: () => void
++}) {
+   const i18n = useI18n()
+   const data = useData()
++  const [state, setState] = createStore<{ open?: boolean }>({})
++  const running = () => props.message.status === "running"
+   const summary = () => (props.message.status === "failed" ? "" : props.message.summary)
++  const hasSummary = createMemo(() => Boolean(summary().trim()))
++  const open = () => (hasSummary() ? (props.open ?? state.open ?? props.defaultOpen ?? false) : false)
++  const heading = createMemo(() => (running() ? reasoningHeading(summary()) : undefined))
+ 
+   const error = () => {
+     if (props.message.status !== "failed") return ""
+@@ -988,7 +1000,7 @@ export function SessionCompactionMessage(props: { message: SessionMessageCompact
+     return "ui.messagePart.compaction.failed"
+   }
+ 
+-  const label = createMemo(() => [i18n.t(outcome()), usage()].filter(Boolean).join(" · "))
++  const title = () => (running() ? i18n.t("ui.messagePart.compaction.running") : i18n.t(outcome()))
+ 
+   return (
+     <Show
+@@ -1003,35 +1015,56 @@ export function SessionCompactionMessage(props: { message: SessionMessageCompact
+         />
+       }
+     >
+-      <div data-component="session-compaction-message">
+-        <CompactionDivider label={i18n.t("ui.messagePart.compaction.started")} />
+-        <Show when={summary().trim()}>
+-          <div data-component="text-part" data-timeline-part-id={props.message.id}>
+-            <div data-slot="text-part-body">
+-              <PacedMarkdown
+-                text={summary()}
+-                cacheKey={props.message.id}
+-                streaming={props.message.status === "running"}
+-              />
++      <div data-component="session-compaction-message" class="py-2">
++        <div role={running() ? "status" : undefined}>
++          <BasicTool
++            icon="archive"
++            status={running() ? "running" : "completed"}
++            compact
++            rail={false}
++            hasContent={hasSummary()}
++            allowOpenWhilePending
++            hideDetails={!hasSummary()}
++            open={open()}
++            onOpenChange={(value) => {
++              if (!hasSummary()) return
++              setState("open", value)
++              props.onOpenChange?.(value)
++              props.onContentRendered?.()
++            }}
++            trigger={
++              <div data-slot="basic-tool-tool-info-structured">
++                <div data-slot="basic-tool-tool-info-main">
++                  <span data-slot="basic-tool-tool-title">
++                    <Show when={running()} fallback={title()}>
++                      <TextShimmer text={title()} active />
++                    </Show>
++                  </span>
++                  <Show
++                    when={running() && !open() && heading()}
++                    fallback={
++                      <Show when={!running() && usage()}>
++                        {(value) => <span data-slot="basic-tool-tool-subtitle">{value()}</span>}
++                      </Show>
++                    }
++                  >
++                    {(value) => (
++                      <span data-slot="basic-tool-tool-subtitle">
++                        <TextReveal text={value()} />
++                      </span>
++                    )}
++                  </Show>
++                </div>
++              </div>
++            }
++          >
++            <div data-component="text-part" data-timeline-part-id={props.message.id}>
++              <div data-slot="text-part-body">
++                <PacedMarkdown text={summary()} cacheKey={props.message.id} streaming={running()} />
++              </div>
+             </div>
+-          </div>
+-        </Show>
+-        <Show when={props.message.status === "running"}>
+-          <div role="status" class="py-2">
+-            <BasicTool
+-              icon="archive"
+-              trigger={{ title: i18n.t("ui.messagePart.compaction.running") }}
+-              status="running"
+-              locked
+-              hideDetails
+-            />
+-          </div>
+-        </Show>
+-        <Show when={props.message.status !== "running"}>
+-          <div class="py-2">
+-            <TimelineSeparator label={label()} />
+-          </div>
+-        </Show>
++          </BasicTool>
++        </div>
+         <Show when={error()}>
+           <Card variant="error" class="error-card">
+             {error()}
+diff --git a/packages/session-ui/src/timeline/session-timeline-row.tsx b/packages/session-ui/src/timeline/session-timeline-row.tsx
+index 87c5a0fba8..7a33893b79 100644
+--- a/packages/session-ui/src/timeline/session-timeline-row.tsx
++++ b/packages/session-ui/src/timeline/session-timeline-row.tsx
+@@ -295,7 +295,13 @@ export function createSessionTimelineRowRenderer(input: {
+             return [{ type: "shell", id: ref.partID, render: () => <Shell messageID={ref.messageID} grouped /> }]
+ 
+           if (message.type !== "assistant" && message.type !== "user")
+-            return [{ type: "notice", id: ref.partID, render: () => <Notice messageID={ref.messageID} grouped /> }]
++            return [
++              {
++                type: "notice",
++                id: ref.partID,
++                render: () => <Notice messageID={ref.messageID} grouped onSizeChange={onSizeChange} />,
++              },
++            ]
+ 
+           return []
+         })
+@@ -597,7 +603,7 @@ export function createSessionTimelineRowRenderer(input: {
+     </div>
+   )
+ 
+-  function Notice(props: { messageID: string; grouped?: boolean }) {
++  function Notice(props: { messageID: string; grouped?: boolean; onSizeChange?: () => void }) {
+     const inset = () => (props.grouped ? "" : padding())
+     const message = createMemo(() => input.projection.messageByID().get(props.messageID))
+ 
+@@ -706,7 +712,13 @@ export function createSessionTimelineRowRenderer(input: {
+           {(message) => (
+             <div data-slot="session-turn-message-container" class={`w-full ${inset()}`}>
+               <div data-slot="session-turn-compaction">
+-                <SessionCompactionMessage message={message()} error={compactionError()} />
++                <SessionCompactionMessage
++                  message={message()}
++                  error={compactionError()}
++                  open={input.disclosure.value(message().id)}
++                  onOpenChange={(open) => input.disclosure.set(message().id, open)}
++                  onContentRendered={props.onSizeChange}
++                />
+               </div>
+             </div>
+           )}
+@@ -1003,7 +1015,7 @@ export function createSessionTimelineRowRenderer(input: {
+ 
+       return (
+         <Frame row={current()}>
+-          <Notice messageID={current().messageID} />
++          <Notice messageID={current().messageID} onSizeChange={onSizeChange} />
+         </Frame>
+       )
+     }
+diff --git a/packages/session-ui/src/timeline/timeline-row.stories.tsx b/packages/session-ui/src/timeline/timeline-row.stories.tsx
+index 32ce0510a8..3fab516b04 100644
+--- a/packages/session-ui/src/timeline/timeline-row.stories.tsx
++++ b/packages/session-ui/src/timeline/timeline-row.stories.tsx
+@@ -490,7 +490,7 @@ export const CompactionFailed = {
+   render: () => (
+     <CurrentSessionTimelineStory
+       title="Compaction failed"
+-      description="A failed compaction keeps the production divider and shows the provider error."
++      description="A failed compaction row shows the failure outcome and provider error."
+       document={compactionFailedDocument}
+       width="600px"
+       backgroundCompaction
+@@ -502,7 +502,7 @@ export const CompactionCancelled = {
+   render: () => (
+     <CurrentSessionTimelineStory
+       title="Compaction cancelled"
+-      description="An interrupted compaction keeps the production divider without an empty error block."
++      description="An interrupted compaction row shows the cancelled outcome without an empty error block."
+       document={compactionCancelledDocument}
+       width="600px"
+       backgroundCompaction
+diff --git a/packages/tui/src/routes/session/index.tsx b/packages/tui/src/routes/session/index.tsx
+index 0e685134a4..d5f4cb74fb 100644
+--- a/packages/tui/src/routes/session/index.tsx
++++ b/packages/tui/src/routes/session/index.tsx
+@@ -2171,14 +2171,24 @@ function SessionSkillMessage(props: { message: Extract<SessionMessageInfo, { typ
+ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type: "compaction" }> }) {
+   const ctx = use()
+   const theme = useTheme()
++  const renderer = useRenderer()
+   const { currentSyntax: syntax } = useThemes()
+   const plugins = usePlugin()
++  const [expanded, setExpanded] = createSignal(false)
++  const [hover, setHover] = createSignal(false)
+   const status = () => props.message.status
+   const cancelled = () => props.message.status === "failed" && props.message.error.type === "aborted"
+   const text = () =>
+     props.message.status === "failed" ? (cancelled() ? "" : props.message.error.message) : props.message.summary
+   const content = createMemo(() => text().trim())
+-  const color = () => (status() === "failed" && !cancelled() ? theme.text.feedback.error.base : theme.text.muted)
++  const expandable = createMemo(() => status() !== "failed" && Boolean(content()))
++  const open = () => (status() === "failed" ? Boolean(content()) : expandable() && expanded())
++  const borderColor = () => (status() === "failed" && !cancelled() ? theme.text.feedback.error.base : theme.text.muted)
++  const color = () => {
++    if (status() === "failed" && !cancelled()) return theme.text.feedback.error.base
++    if (hover() && expandable()) return theme.text.base
++    return theme.text.muted
++  }
+   // Usage of the compaction request itself; the resulting context size only shows on the next assistant step.
+   const usage = () => {
+     if (props.message.status === "running" || !props.message.tokens) return
+@@ -2190,8 +2200,17 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
+   }
+   return (
+     <box>
+-      <box flexDirection="row" alignItems="center">
+-        <box border={["top"]} borderColor={color()} flexGrow={1} />
++      <box
++        flexDirection="row"
++        alignItems="center"
++        onMouseOver={() => expandable() && setHover(true)}
++        onMouseOut={() => setHover(false)}
++        onMouseUp={() => {
++          if (!expandable() || renderer.getSelection()?.getSelectedText()) return
++          setExpanded((value) => !value)
++        }}
++      >
++        <box border={["top"]} borderColor={borderColor()} flexGrow={1} />
+         <box flexDirection="row" gap={1} paddingLeft={1} paddingRight={1}>
+           <Switch>
+             <Match when={status() === "running"}>
+@@ -2203,10 +2222,15 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
+               <text fg={color()}>✗</text>
+             </Match>
+           </Switch>
++          <Show when={expandable()}>
++            <text fg={color()}>{expanded() ? "−" : "+"}</text>
++          </Show>
+           <text fg={color()}>
+             {props.message.status === "completed" && props.message.native?.messages
+               ? "Provider compaction"
+-              : "Compaction"}
++              : status() === "running"
++                ? "Compacting"
++                : "Compaction"}
+           </text>
+           <Show when={cancelled()}>
+             <text fg={color()}>· cancelled</text>
+@@ -2215,21 +2239,28 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
+             <text fg={color()}>· {usage()}</text>
+           </Show>
+         </box>
+-        <box border={["top"]} borderColor={color()} flexGrow={1} />
++        <box border={["top"]} borderColor={borderColor()} flexGrow={1} />
+       </box>
+-      <Show when={content()}>
++      <Show when={open()}>
+         <box paddingTop={1} paddingLeft={3}>
+-          <markdown
+-            syntaxStyle={syntax()}
+-            renderNode={plugins.markdown()}
+-            streaming={true}
+-            internalBlockMode="top-level"
+-            content={content()}
+-            tableOptions={{ style: "grid", cellPaddingX: 1 }}
+-            conceal={ctx.markdownMode() === "rendered"}
+-            fg={theme.markdown.text}
+-            bg={theme.background.base}
+-          />
++          <box
++            border={expandable() ? ["left"] : undefined}
++            customBorderChars={SplitBorder.customBorderChars}
++            borderColor={theme.border.base}
++            paddingLeft={expandable() ? 1 : 0}
++          >
++            <markdown
++              syntaxStyle={syntax()}
++              renderNode={plugins.markdown()}
++              streaming={true}
++              internalBlockMode="top-level"
++              content={content()}
++              tableOptions={{ style: "grid", cellPaddingX: 1 }}
++              conceal={ctx.markdownMode() === "rendered"}
++              fg={theme.markdown.text}
++              bg={theme.background.base}
++            />
++          </box>
+         </box>
+       </Show>
+     </box>
+diff --git a/packages/tui/test/app-lifecycle.test.tsx b/packages/tui/test/app-lifecycle.test.tsx
+index 959bdfa8fb..c3c422e007 100644
+--- a/packages/tui/test/app-lifecycle.test.tsx
++++ b/packages/tui/test/app-lifecycle.test.tsx
+@@ -663,12 +663,17 @@ test.each([80, 120])("completes custom Markdown and ordinary fences in a session
+       frame.includes("DiagramStart") &&
+       frame.includes("DiagramEnd") &&
+       frame.includes("x\u00b2") &&
+-      frame.includes("y\u00b2"),
++      frame.includes("Compaction"),
+   )
+-  expect(streaming).toContain("Compaction")
++  expect(streaming).not.toContain("y\u00b2")
+   expect(streaming).not.toContain("initial final")
+   expect(streaming).not.toContain("MARKDOWN_END")
+ 
++  const lines = streaming.split("\n")
++  const compactionRow = lines.findIndex((line) => line.includes("Compaction"))
++  await setup.mockMouse.click(lines[compactionRow]!.indexOf("Compaction") + 1, compactionRow)
++  await setup.waitForFrame((frame) => frame.includes("y\u00b2"))
++
+   // Queue final text and completion together to exercise TextPart's reactive property order.
+   setup.events.emit({
+     id: "evt_markdown_text_ended",
+-- 
+2.50.1 (Apple Git-155)
+
