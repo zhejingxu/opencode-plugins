@@ -9,6 +9,7 @@ human-written text (long AI-style issues are auto-flagged), so keep these brief 
 | 2 | new issue | structured failure reason for plugin `generate.text` | `02-generate-error-reason.md` |
 | 3 | comment | #48596 Make Compaction Summary Collapsible by Default | `03-comment-48596.md` |
 | 4 | comment | #55195 Pin messages and selected text in the Desktop chat | `04-comment-55195.md` |
+| 5 | PR (after a maintainer OKs #48596) | branch `collapse-compaction` on origin/dev | `05-pr-collapse-compaction.md` |
 
 Related, already filed, no action needed: #56037 / #57619 (third-party GUI extensions), #61187 (code-block actions).
 
