@@ -1,4 +1,4 @@
-From 65b216d41c7ee49616168362dd02689c3e8f7748 Mon Sep 17 00:00:00 2001
+From 203e3fcb92143492037daa8181750b5c235f2db1 Mon Sep 17 00:00:00 2001
 From: xuzhejing <xuzhejing@bytedance.com>
 Date: Tue, 3 Nov 2026 09:55:21 +0800
 Subject: [PATCH 2/3] feat(app): pin Q&A turns to a left-side panel

@@ -1,4 +1,4 @@
-From 9ec5d3f8c7eadcdc8bca7778db5ce8f377b43183 Mon Sep 17 00:00:00 2001
+From 8862667a6b41a694a19f8d537d394a6054491f51 Mon Sep 17 00:00:00 2001
 From: xuzhejing <xuzhejing@bytedance.com>
 Date: Tue, 3 Nov 2026 09:57:30 +0800
 Subject: [PATCH 3/3] feat(app): show model health from the model-health plugin
