@@ -1,5 +1,5 @@
-From b05a191bfc34e8345ef7150ad4e2169706c1050f Mon Sep 17 00:00:00 2001
-From: zhejingxu <6896703+zhejingxu@users.noreply.github.com>
+From 9ec5d3f8c7eadcdc8bca7778db5ce8f377b43183 Mon Sep 17 00:00:00 2001
+From: xuzhejing <xuzhejing@bytedance.com>
 Date: Tue, 3 Nov 2026 09:57:30 +0800
 Subject: [PATCH 3/3] feat(app): show model health from the model-health plugin
  in the model selector
@@ -8,10 +8,10 @@ Subject: [PATCH 3/3] feat(app): show model health from the model-health plugin
  .../app/src/providers/models/health-rpc.ts    |  42 ++++++
  .../app/src/providers/models/health.test.ts   |  49 +++++++
  packages/app/src/providers/models/health.tsx  | 138 ++++++++++++++++++
- .../src/providers/models/select-dialog.css    |  33 +++++
- .../src/providers/models/select-dialog.tsx    |  66 ++++++++-
+ .../src/providers/models/select-dialog.css    |  34 +++++
+ .../src/providers/models/select-dialog.tsx    |  55 +++++++
  packages/app/src/runtime/i18n/en.ts           |  18 +++
- 6 files changed, 345 insertions(+), 1 deletion(-)
+ 6 files changed, 336 insertions(+)
  create mode 100644 packages/app/src/providers/models/health-rpc.ts
  create mode 100644 packages/app/src/providers/models/health.test.ts
  create mode 100644 packages/app/src/providers/models/health.tsx
@@ -264,13 +264,14 @@ index 0000000000..a5e64315e6
 +  return <span class="model-health-indicator" data-status={status()} role="img" aria-label={label()} title={label()} />
 +}
 diff --git a/packages/app/src/providers/models/select-dialog.css b/packages/app/src/providers/models/select-dialog.css
-index bfd9e8422e..4e14863e01 100644
+index 817e9e85ad..31de14cbe0 100644
 --- a/packages/app/src/providers/models/select-dialog.css
 +++ b/packages/app/src/providers/models/select-dialog.css
-@@ -36,3 +36,36 @@
-     padding-inline: 0;
+@@ -243,3 +243,37 @@
+     user-select: none;
    }
  }
++
 +.model-health-indicator {
 +  display: inline-block;
 +  flex-shrink: 0;
@@ -305,37 +306,28 @@ index bfd9e8422e..4e14863e01 100644
 +  }
 +}
 diff --git a/packages/app/src/providers/models/select-dialog.tsx b/packages/app/src/providers/models/select-dialog.tsx
-index 929f4385f3..77e6d22158 100644
+index 88356338d7..95d104b483 100644
 --- a/packages/app/src/providers/models/select-dialog.tsx
 +++ b/packages/app/src/providers/models/select-dialog.tsx
-@@ -14,6 +14,7 @@ import { Tooltip } from "@opencode/ui/tooltip"
- import { Menu } from "@opencode/ui/menu"
+@@ -31,6 +31,7 @@ import { Tooltip } from "@opencode/ui/tooltip"
  import { TextInput } from "@opencode/ui/text-input"
  import { ModelTooltip } from "./tooltip"
+ import { ModelDetails } from "./details"
 +import { createModelHealth, ModelHealthIndicator } from "./health"
  import { useLanguage } from "@/runtime/i18n/language"
  import { ExternalLink } from "@/runtime/platform/external-link"
  import { useData } from "@/runtime/server/current"
-@@ -51,6 +52,8 @@ const modelKey = (model: ModelItem) => `${model.provider.id}:${model.id}`
- 
- const manageKey = "action:manage"
- 
-+const checkKey = "action:check"
-+
- const sortModelGroups = (a: { category: string; items: ModelItem[] }, b: { category: string; items: ModelItem[] }) => {
-   const aIndex = popularProviders.indexOf(a.category)
-   const bIndex = popularProviders.indexOf(b.category)
-@@ -74,6 +77,7 @@ const ModelList: Component<{
-   model?: ModelState
+@@ -106,6 +107,7 @@ const ModelList: Component<{
  }> = (props) => {
    const language = useLanguage()
+   const usage = createModelUsage({ refresh: true })
 +  const health = createModelHealth()
  
    const controller = createModelSelectorController({
      model: props.model,
-@@ -107,6 +111,11 @@ const ModelList: Component<{
-       (item) => expanded(item.provider.id) && (!managedIDs().has(item.provider.id) || expanded(CONSOLE_GROUP_KEY)),
-     )
+@@ -145,6 +147,11 @@ const ModelList: Component<{
+     })
+   }
  
 +  createEffect(() => {
 +    if (props.mobile && !props.open) return
@@ -345,7 +337,7 @@ index 929f4385f3..77e6d22158 100644
    let scrollRef: HTMLDivElement | undefined
  
    const setSearch = (value: string) => {
-@@ -152,6 +161,10 @@ const ModelList: Component<{
+@@ -202,6 +209,10 @@ const ModelList: Component<{
              >
                <div data-slot="settings-row-copy">
                  <div data-slot="settings-row-title" class="flex items-center gap-2">
@@ -356,7 +348,7 @@ index 929f4385f3..77e6d22158 100644
                    <Tooltip
                      inactive={props.mobile}
                      placement="right-start"
-@@ -185,6 +198,16 @@ const ModelList: Component<{
+@@ -234,6 +245,16 @@ const ModelList: Component<{
  
    return (
      <div class="flex min-h-0 flex-1 flex-col">
@@ -373,120 +365,76 @@ index 929f4385f3..77e6d22158 100644
        <div data-slot="model-selector-search" class="shrink-0 pt-px pb-3" classList={{ "px-4": !props.mobile }}>
          <TextInput
            type="search"
-@@ -265,6 +288,7 @@ export function ModelSelectorPopover(props: {
- }) {
-   const dialog = useDialog()
-   const mobile = createMediaQuery("(max-width: 767px)")
+@@ -639,6 +660,7 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
+   const labels = createProviderLabels(controller.all)
+   const chatgptPlan = createChatgptPlan(controller.current)
+   const usage = createModelUsage({ refresh: true })
 +  const health = createModelHealth()
-   const data = useData()
-   const location = useWorkspaceLocation()
  
-@@ -304,6 +328,7 @@ export function ModelSelectorPopover(props: {
-           models={controller.models}
-           groups={controller.groups}
-           current={controller.current()}
-+          health={health}
-           chatgptPlan={chatgptPlan()}
-           select={controller.select}
-           onManage={manage}
-@@ -500,6 +525,7 @@ export function ModelSelectorPopoverView(props: {
-   models: (search: string) => ModelItem[]
-   groups: (models: ModelItem[]) => { category: string; items: ModelItem[] }[]
-   current: string | undefined
-+  health?: ReturnType<typeof createModelHealth>
-   chatgptPlan?: boolean
-   select: (item: ModelItem) => void
-   onManage: () => void
-@@ -513,7 +539,11 @@ export function ModelSelectorPopoverView(props: {
+   // `navigated`: the arrows have moved through the results since the query last changed.
+   const [query, setQuery] = createStore({ search: "", navigated: false })
+@@ -669,6 +691,19 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
+   )
  
-   const models = createMemo(() => props.models(store.search))
-   const groups = createMemo(() => props.groups(models()))
--  const keys = () => [...groups().flatMap((group) => group.items.map(modelKey)), manageKey]
-+  const keys = () => [
-+    ...groups().flatMap((group) => group.items.map(modelKey)),
-+    ...(props.health?.supported() ? [checkKey] : []),
-+    manageKey,
-+  ]
- 
-   const managed = createMemo(() => consoleModelGroup(props.all()))
-   const managedIDs = createMemo(() => new Set(managed()?.providers.map((provider) => provider.id)))
-@@ -571,6 +601,16 @@ export function ModelSelectorPopoverView(props: {
-     dismiss.afterClose(props.onManage)
-   }
- 
+   const rowItem = (id: string) => rows().find((row) => row.id === id)?.item
++
++  // Probes run on request only: opening the dialog checks the listed models whose results expired.
++  createEffect(() => void health.checkAll(rows().map((row) => row.item)))
++
 +  const check = () => {
-+    const item =
-+      models().find((item) => modelKey(item) === store.active) ??
-+      models().find((item) => modelKey(item) === props.current) ??
-+      models()[0]
++    const item = list?.active()?.item ?? rows().find((row) => row.id === controller.current())?.item
 +
-+    if (item) void props.health?.check(item.provider.id, item.id, { force: true })
-+    void props.health?.checkAll(models(), { force: true })
++    if (item) void health.check(item.provider.id, item.id, { force: true })
++    void health.checkAll(
++      rows().map((row) => row.item),
++      { force: true },
++    )
 +  }
-+
-   const selectActive = () => {
-     const item = models().find((item) => modelKey(item) === store.active)
+   const flyoutId = createMemo(() => selectFlyoutOpenId(flyout()))
  
-@@ -581,6 +621,8 @@ export function ModelSelectorPopoverView(props: {
-     }
- 
-     if (store.active === manageKey) manage()
-+
-+    if (store.active === checkKey) check()
-   }
- 
-   const moveActive = (delta: number) => {
-@@ -600,6 +642,7 @@ export function ModelSelectorPopoverView(props: {
- 
-   createEffect(() => {
-     if (!store.open) return
-+    void props.health?.checkAll(models())
-     createEventListener(
-       document,
-       "keydown",
-@@ -745,6 +788,10 @@ export function ModelSelectorPopoverView(props: {
-                                 }}
-                                 onSelect={() => selectModel(item)}
-                               >
-+                                <ModelHealthIndicator
-+                                  result={props.health?.result(item.provider.id, item.id)}
-+                                  pending={props.health?.pending(item.provider.id, item.id)}
-+                                />
-                                 <span class="min-w-0 truncate leading-5">{item.name}</span>
-                                 <Show when={isFree(item.provider.id, item.cost)}>
-                                   <Badge class="shrink-0">{language.t("model.tag.free")}</Badge>
-@@ -765,6 +812,23 @@ export function ModelSelectorPopoverView(props: {
-           </ScrollView>
-           <div class="h-px bg-v2-border-border-muted" />
-           <div class="flex flex-col p-0.5">
-+            <Show when={props.health?.supported()}>
-+              <button
-+                type="button"
-+                class="flex h-8 w-full items-center gap-2 rounded-sm px-3 text-start text-[13px] leading-5 text-v2-text-text-muted hover:bg-v2-overlay-simple-overlay-hover disabled:opacity-50"
-+                disabled={!props.health || props.health.checking() || !models().length}
-+                data-option-key={checkKey}
-+                title={language.t("model.health.cost")}
-+                onPointerDown={(event) => event.preventDefault()}
-+                onMouseEnter={() => {
-+                  setStore("active", checkKey)
-+                  setTimeout(() => searchRef?.focus())
-+                }}
-+                onClick={check}
-+              >
-+                {language.t(props.health?.checking() ? "model.health.checking" : "model.health.checkHighlighted")}
-+              </button>
-+            </Show>
-             <Menu.Item
-               data-option-key={manageKey}
-               classList={{ "!bg-v2-overlay-simple-overlay-hover": store.active === manageKey }}
+   const flyoutItem = () => {
+@@ -950,6 +985,10 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
+           </Show>
+         </span>
+         <span data-slot="model-dialog-name">
++          <ModelHealthIndicator
++            result={health.result(item().provider.id, item().id)}
++            pending={health.pending(item().provider.id, item().id)}
++          />
+           <span class="min-w-0 truncate">
+             <SearchHighlight text={item().name} />
+           </span>
+@@ -1009,6 +1048,22 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
+             placeholder={language.t("dialog.model.search.placeholder")}
+             trailing={
+               <>
++                <Show when={health.supported()}>
++                  <Tooltip
++                    placement="top"
++                    gutter={4}
++                    value={`${language.t(health.checking() ? "model.health.checking" : "model.health.checkHighlighted")} · ${language.t("model.health.cost")}`}
++                    ignoreSafeArea={false}
++                  >
++                    <IconButton
++                      variant="ghost-muted"
++                      icon={<Icon name="refresh" size="small" />}
++                      aria-label={language.t("model.health.checkHighlighted")}
++                      disabled={health.checking() || rows().length === 0}
++                      onClick={check}
++                    />
++                  </Tooltip>
++                </Show>
+                 <Tooltip
+                   placement="top"
+                   gutter={4}
 diff --git a/packages/app/src/runtime/i18n/en.ts b/packages/app/src/runtime/i18n/en.ts
-index 095bbd8800..76cc236fb0 100644
+index 4c25becca8..331bf3fdc4 100644
 --- a/packages/app/src/runtime/i18n/en.ts
 +++ b/packages/app/src/runtime/i18n/en.ts
-@@ -1,6 +1,24 @@
- import { DESKTOP_NATIVE_ENGLISH } from "./desktop-native"
- 
- export const dict = {
+@@ -18,6 +18,24 @@ export const dict = {
+   "voice.failure.microphone": "Microphone access is required to call.",
+   "voice.failure.dropped": "The call disconnected.",
+   "voice.failure.connection": "Couldn’t connect the call.",
 +  "model.health.available": "Available",
 +  "model.health.unavailable": "Unavailable",
 +  "model.health.unknown": "Not checked or expired",

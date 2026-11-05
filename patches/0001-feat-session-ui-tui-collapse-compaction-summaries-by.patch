@@ -1,5 +1,5 @@
-From e7cf05e742e6f46c664229c61ff7ab06089777eb Mon Sep 17 00:00:00 2001
-From: zhejingxu <6896703+zhejingxu@users.noreply.github.com>
+From fa999a770636e017fe811641ad7610fbbcea31cf Mon Sep 17 00:00:00 2001
+From: xuzhejing <xuzhejing@bytedance.com>
 Date: Tue, 3 Nov 2026 09:55:14 +0800
 Subject: [PATCH 1/3] feat(session-ui,tui): collapse compaction summaries by
  default
@@ -9,16 +9,16 @@ Subject: [PATCH 1/3] feat(session-ui,tui): collapse compaction summaries by
  .../src/components/message-part.css           | 54 ++++++++++-
  .../src/message/message-content.tsx           | 93 +++++++++++++------
  .../src/timeline/session-timeline-row.tsx     | 20 +++-
- .../src/timeline/timeline-row.stories.tsx     |  8 +-
+ .../src/timeline/timeline-row.stories.tsx     |  4 +-
  packages/tui/src/routes/session/index.tsx     | 65 +++++++++----
  packages/tui/test/app-lifecycle.test.tsx      |  9 +-
- 7 files changed, 220 insertions(+), 83 deletions(-)
+ 7 files changed, 218 insertions(+), 81 deletions(-)
 
 diff --git a/packages/app/e2e/regression/timeline-stream.spec.ts b/packages/app/e2e/regression/timeline-stream.spec.ts
-index a927f8dfc3..6de8dde5f6 100644
+index b532309b31..3750cbc989 100644
 --- a/packages/app/e2e/regression/timeline-stream.spec.ts
 +++ b/packages/app/e2e/regression/timeline-stream.spec.ts
-@@ -1412,30 +1412,33 @@ test.describe("compaction", () => {
+@@ -1564,30 +1564,33 @@ test.describe("compaction", () => {
  
      await timeline.send(compactionStarted({ sessionID, reason: "manual", recent: "" }))
      const compaction = page.locator('[data-component="session-compaction-message"]')
@@ -65,7 +65,7 @@ index a927f8dfc3..6de8dde5f6 100644
  
      await timeline.send(
        compactionEnded({
-@@ -1445,21 +1448,17 @@ test.describe("compaction", () => {
+@@ -1597,21 +1600,17 @@ test.describe("compaction", () => {
          recent: "",
        }),
      )
@@ -93,8 +93,8 @@ index a927f8dfc3..6de8dde5f6 100644
 +    await expect(compaction).not.toContainText("Streamed implementation details.")
    })
  
-   const outcomes = {
-@@ -1509,6 +1508,11 @@ test.describe("compaction", () => {
+   test("shows an automatic compaction as one quiet divider with background compaction on", async ({ page }) => {
+@@ -1688,6 +1687,11 @@ test.describe("compaction", () => {
          await timeline.send(compactionDelta({ sessionID, text: outcome.partial }))
          await expect(compactions).toHaveCount(index + 1)
          const compaction = compactions.nth(index)
@@ -106,7 +106,7 @@ index a927f8dfc3..6de8dde5f6 100644
          await expect(compaction).toContainText(outcome.partial)
  
          if (name === "interrupted") {
-@@ -1532,13 +1536,13 @@ test.describe("compaction", () => {
+@@ -1711,13 +1715,13 @@ test.describe("compaction", () => {
        for (const [index, name] of names.entries()) {
          const outcome = outcomes[name]
          const compaction = compactions.nth(index)
@@ -122,10 +122,10 @@ index a927f8dfc3..6de8dde5f6 100644
  
          if (outcome.shown) await expect(compaction.getByText(outcome.shown, { exact: true })).toBeVisible()
 diff --git a/packages/session-ui/src/components/message-part.css b/packages/session-ui/src/components/message-part.css
-index 1ab90aeb6b..a664991d34 100644
+index 07d640b314..9ae964c343 100644
 --- a/packages/session-ui/src/components/message-part.css
 +++ b/packages/session-ui/src/components/message-part.css
-@@ -326,8 +326,59 @@
+@@ -624,8 +624,59 @@
    }
  }
  
@@ -186,7 +186,7 @@ index 1ab90aeb6b..a664991d34 100644
      opacity: 0.6;
    }
  }
-@@ -804,6 +855,7 @@
+@@ -1384,6 +1435,7 @@
  [data-component="user-message"] [data-slot="user-message-text"],
  [data-component="text-part"],
  [data-component="reasoning-part"],
@@ -195,10 +195,10 @@ index 1ab90aeb6b..a664991d34 100644
  [data-component="bash-output"],
  [data-component="edit-content"],
 diff --git a/packages/session-ui/src/message/message-content.tsx b/packages/session-ui/src/message/message-content.tsx
-index 6fa5a9fd1b..73dc2ffd5b 100644
+index fb5e9f16c2..cdf12da5c4 100644
 --- a/packages/session-ui/src/message/message-content.tsx
 +++ b/packages/session-ui/src/message/message-content.tsx
-@@ -536,9 +536,21 @@ function CompactionDivider(props: { label: string }) {
+@@ -874,10 +874,22 @@ function CompactionDivider(props: { label: string }) {
    )
  }
  
@@ -212,6 +212,7 @@ index 6fa5a9fd1b..73dc2ffd5b 100644
 +  onContentRendered?: () => void
 +}) {
    const i18n = useI18n()
+   const data = useData()
 +  const [state, setState] = createStore<{ open?: boolean }>({})
 +  const running = () => props.message.status === "running"
    const summary = () => (props.message.status === "failed" ? "" : props.message.summary)
@@ -221,7 +222,7 @@ index 6fa5a9fd1b..73dc2ffd5b 100644
  
    const error = () => {
      if (props.message.status !== "failed") return ""
-@@ -580,38 +592,59 @@ export function SessionCompactionMessage(props: { message: SessionMessageCompact
+@@ -919,7 +931,7 @@ export function SessionCompactionMessage(props: { message: SessionMessageCompact
      return "ui.messagePart.compaction.failed"
    }
  
@@ -229,92 +230,97 @@ index 6fa5a9fd1b..73dc2ffd5b 100644
 +  const title = () => (running() ? i18n.t("ui.messagePart.compaction.running") : i18n.t(outcome()))
  
    return (
--    <div data-component="session-compaction-message">
--      <CompactionDivider label={i18n.t("ui.messagePart.compaction.started")} />
--      <Show when={summary().trim()}>
--        <div data-component="text-part" data-timeline-part-id={props.message.id}>
--          <div data-slot="text-part-body">
--            <PacedMarkdown
--              text={summary()}
--              cacheKey={props.message.id}
--              streaming={props.message.status === "running"}
--            />
-+    <div data-component="session-compaction-message" class="py-2">
-+      <div role={running() ? "status" : undefined}>
-+        <BasicTool
-+          icon="archive"
-+          status={running() ? "running" : "completed"}
-+          compact
-+          rail={false}
-+          hasContent={hasSummary()}
-+          allowOpenWhilePending
-+          hideDetails={!hasSummary()}
-+          open={open()}
-+          onOpenChange={(value) => {
-+            if (!hasSummary()) return
-+            setState("open", value)
-+            props.onOpenChange?.(value)
-+            props.onContentRendered?.()
-+          }}
-+          trigger={
-+            <div data-slot="basic-tool-tool-info-structured">
-+              <div data-slot="basic-tool-tool-info-main">
-+                <span data-slot="basic-tool-tool-title">
-+                  <Show when={running()} fallback={title()}>
-+                    <TextShimmer text={title()} active />
-+                  </Show>
-+                </span>
-+                <Show
-+                  when={running() && !open() && heading()}
-+                  fallback={
-+                    <Show when={!running() && usage()}>
-+                      {(value) => <span data-slot="basic-tool-tool-subtitle">{value()}</span>}
+     <Show
+@@ -934,35 +946,56 @@ export function SessionCompactionMessage(props: { message: SessionMessageCompact
+         />
+       }
+     >
+-      <div data-component="session-compaction-message">
+-        <CompactionDivider label={i18n.t("ui.messagePart.compaction.started")} />
+-        <Show when={summary().trim()}>
+-          <div data-component="text-part" data-timeline-part-id={props.message.id}>
+-            <div data-slot="text-part-body">
+-              <PacedMarkdown
+-                text={summary()}
+-                cacheKey={props.message.id}
+-                streaming={props.message.status === "running"}
+-              />
++      <div data-component="session-compaction-message" class="py-2">
++        <div role={running() ? "status" : undefined}>
++          <BasicTool
++            icon="archive"
++            status={running() ? "running" : "completed"}
++            compact
++            rail={false}
++            hasContent={hasSummary()}
++            allowOpenWhilePending
++            hideDetails={!hasSummary()}
++            open={open()}
++            onOpenChange={(value) => {
++              if (!hasSummary()) return
++              setState("open", value)
++              props.onOpenChange?.(value)
++              props.onContentRendered?.()
++            }}
++            trigger={
++              <div data-slot="basic-tool-tool-info-structured">
++                <div data-slot="basic-tool-tool-info-main">
++                  <span data-slot="basic-tool-tool-title">
++                    <Show when={running()} fallback={title()}>
++                      <TextShimmer text={title()} active />
 +                    </Show>
-+                  }
-+                >
-+                  {(value) => (
-+                    <span data-slot="basic-tool-tool-subtitle">
-+                      <TextReveal text={value()} />
-+                    </span>
-+                  )}
-+                </Show>
++                  </span>
++                  <Show
++                    when={running() && !open() && heading()}
++                    fallback={
++                      <Show when={!running() && usage()}>
++                        {(value) => <span data-slot="basic-tool-tool-subtitle">{value()}</span>}
++                      </Show>
++                    }
++                  >
++                    {(value) => (
++                      <span data-slot="basic-tool-tool-subtitle">
++                        <TextReveal text={value()} />
++                      </span>
++                    )}
++                  </Show>
++                </div>
 +              </div>
-+            </div>
-+          }
-+        >
-+          <div data-component="text-part" data-timeline-part-id={props.message.id}>
-+            <div data-slot="text-part-body">
-+              <PacedMarkdown text={summary()} cacheKey={props.message.id} streaming={running()} />
-+            </div>
-           </div>
--        </div>
--      </Show>
--      <Show when={props.message.status === "running"}>
--        <div role="status" class="py-2">
--          <BasicTool
--            icon="archive"
--            trigger={{ title: i18n.t("ui.messagePart.compaction.running") }}
--            status="running"
--            locked
--            hideDetails
--          />
--        </div>
--      </Show>
--      <Show when={props.message.status !== "running"}>
--        <div class="py-2">
--          <TimelineSeparator label={label()} />
--        </div>
--      </Show>
-+        </BasicTool>
-+      </div>
-       <Show when={error()}>
-         <Card variant="error" class="error-card">
-           {error()}
++            }
++          >
++            <div data-component="text-part" data-timeline-part-id={props.message.id}>
++              <div data-slot="text-part-body">
++                <PacedMarkdown text={summary()} cacheKey={props.message.id} streaming={running()} />
++              </div>
+             </div>
+-          </div>
+-        </Show>
+-        <Show when={props.message.status === "running"}>
+-          <div role="status" class="py-2">
+-            <BasicTool
+-              icon="archive"
+-              trigger={{ title: i18n.t("ui.messagePart.compaction.running") }}
+-              status="running"
+-              locked
+-              hideDetails
+-            />
+-          </div>
+-        </Show>
+-        <Show when={props.message.status !== "running"}>
+-          <div class="py-2">
+-            <TimelineSeparator label={label()} />
+-          </div>
+-        </Show>
++          </BasicTool>
++        </div>
+         <Show when={error()}>
+           <Card variant="error" class="error-card">
+             <LinkedText text={error()} />
 diff --git a/packages/session-ui/src/timeline/session-timeline-row.tsx b/packages/session-ui/src/timeline/session-timeline-row.tsx
-index 86e2f33ba1..02f3d69e02 100644
+index b14dfe66b8..7f19482b6b 100644
 --- a/packages/session-ui/src/timeline/session-timeline-row.tsx
 +++ b/packages/session-ui/src/timeline/session-timeline-row.tsx
-@@ -204,7 +204,13 @@ export function createSessionTimelineRowRenderer(input: {
+@@ -320,7 +320,13 @@ export function createSessionTimelineRowRenderer(input: {
              return [{ type: "shell", id: ref.partID, render: () => <Shell messageID={ref.messageID} grouped /> }]
  
            if (message.type !== "assistant" && message.type !== "user")
@@ -329,7 +335,7 @@ index 86e2f33ba1..02f3d69e02 100644
  
            return []
          })
-@@ -482,7 +488,7 @@ export function createSessionTimelineRowRenderer(input: {
+@@ -640,7 +646,7 @@ export function createSessionTimelineRowRenderer(input: {
      </div>
    )
  
@@ -338,7 +344,7 @@ index 86e2f33ba1..02f3d69e02 100644
      const inset = () => (props.grouped ? "" : padding())
      const message = createMemo(() => input.projection.messageByID().get(props.messageID))
  
-@@ -578,7 +584,13 @@ export function createSessionTimelineRowRenderer(input: {
+@@ -749,7 +755,13 @@ export function createSessionTimelineRowRenderer(input: {
            {(message) => (
              <div data-slot="session-turn-message-container" class={`w-full ${inset()}`}>
                <div data-slot="session-turn-compaction">
@@ -353,7 +359,7 @@ index 86e2f33ba1..02f3d69e02 100644
                </div>
              </div>
            )}
-@@ -782,7 +794,7 @@ export function createSessionTimelineRowRenderer(input: {
+@@ -1046,7 +1058,7 @@ export function createSessionTimelineRowRenderer(input: {
  
        return (
          <Frame row={current()}>
@@ -363,28 +369,10 @@ index 86e2f33ba1..02f3d69e02 100644
        )
      }
 diff --git a/packages/session-ui/src/timeline/timeline-row.stories.tsx b/packages/session-ui/src/timeline/timeline-row.stories.tsx
-index 5f23f04039..65e381bff3 100644
+index 39503847d7..6bad49ba17 100644
 --- a/packages/session-ui/src/timeline/timeline-row.stories.tsx
 +++ b/packages/session-ui/src/timeline/timeline-row.stories.tsx
-@@ -375,7 +375,7 @@ export const CompactionInProgress = {
-   render: () => (
-     <CurrentSessionTimelineStory
-       title="Compaction in progress"
--      description="The production divider remains stable while the context summary streams below it."
-+      description="Compaction stays collapsed by default and previews the current section heading while streaming."
-       document={compactionRunningDocument}
-       width="600px"
-     />
-@@ -386,7 +386,7 @@ export const CompactionAndContinuation = {
-   render: () => (
-     <CurrentSessionTimelineStory
-       title="Compaction and continuation"
--      description="The context summary separates earlier output from the continued response."
-+      description="The collapsible compaction row separates earlier output from the continued response."
-       document={compactionDocument}
-       width="600px"
-     />
-@@ -397,7 +397,7 @@ export const CompactionFailed = {
+@@ -551,7 +551,7 @@ export const CompactionFailed = {
    render: () => (
      <CurrentSessionTimelineStory
        title="Compaction failed"
@@ -392,8 +380,8 @@ index 5f23f04039..65e381bff3 100644
 +      description="A failed compaction row shows the failure outcome and provider error."
        document={compactionFailedDocument}
        width="600px"
-     />
-@@ -408,7 +408,7 @@ export const CompactionCancelled = {
+       backgroundCompaction
+@@ -563,7 +563,7 @@ export const CompactionCancelled = {
    render: () => (
      <CurrentSessionTimelineStory
        title="Compaction cancelled"
@@ -401,12 +389,12 @@ index 5f23f04039..65e381bff3 100644
 +      description="An interrupted compaction row shows the cancelled outcome without an empty error block."
        document={compactionCancelledDocument}
        width="600px"
-     />
+       backgroundCompaction
 diff --git a/packages/tui/src/routes/session/index.tsx b/packages/tui/src/routes/session/index.tsx
-index a89ed127b3..f7eece66bb 100644
+index e470eae06c..aac5cce443 100644
 --- a/packages/tui/src/routes/session/index.tsx
 +++ b/packages/tui/src/routes/session/index.tsx
-@@ -2044,14 +2044,24 @@ function SessionSkillMessage(props: { message: Extract<SessionMessageInfo, { typ
+@@ -2171,14 +2171,24 @@ function SessionSkillMessage(props: { message: Extract<SessionMessageInfo, { typ
  function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type: "compaction" }> }) {
    const ctx = use()
    const theme = useTheme()
@@ -432,7 +420,7 @@ index a89ed127b3..f7eece66bb 100644
    // Usage of the compaction request itself; the resulting context size only shows on the next assistant step.
    const usage = () => {
      if (props.message.status === "running" || !props.message.tokens) return
-@@ -2063,8 +2073,17 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
+@@ -2190,8 +2200,17 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
    }
    return (
      <box>
@@ -452,7 +440,7 @@ index a89ed127b3..f7eece66bb 100644
          <box flexDirection="row" gap={1} paddingLeft={1} paddingRight={1}>
            <Switch>
              <Match when={status() === "running"}>
-@@ -2076,10 +2095,15 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
+@@ -2203,10 +2222,15 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
                <text fg={color()}>✗</text>
              </Match>
            </Switch>
@@ -460,7 +448,7 @@ index a89ed127b3..f7eece66bb 100644
 +            <text fg={color()}>{expanded() ? "−" : "+"}</text>
 +          </Show>
            <text fg={color()}>
-             {props.message.status === "completed" && props.message.providerContext
+             {props.message.status === "completed" && props.message.native?.messages
                ? "Provider compaction"
 -              : "Compaction"}
 +              : status() === "running"
@@ -469,7 +457,7 @@ index a89ed127b3..f7eece66bb 100644
            </text>
            <Show when={cancelled()}>
              <text fg={color()}>· cancelled</text>
-@@ -2088,21 +2112,28 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
+@@ -2215,21 +2239,28 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
              <text fg={color()}>· {usage()}</text>
            </Show>
          </box>
@@ -512,10 +500,10 @@ index a89ed127b3..f7eece66bb 100644
        </Show>
      </box>
 diff --git a/packages/tui/test/app-lifecycle.test.tsx b/packages/tui/test/app-lifecycle.test.tsx
-index f958b8c3d9..927d296c25 100644
+index ae6f6415b5..75c8c8397c 100644
 --- a/packages/tui/test/app-lifecycle.test.tsx
 +++ b/packages/tui/test/app-lifecycle.test.tsx
-@@ -628,12 +628,17 @@ test.each([80, 120])("completes custom Markdown and ordinary fences in a session
+@@ -663,12 +663,17 @@ test.each([80, 120])("completes custom Markdown and ordinary fences in a session
        frame.includes("DiagramStart") &&
        frame.includes("DiagramEnd") &&
        frame.includes("x\u00b2") &&
