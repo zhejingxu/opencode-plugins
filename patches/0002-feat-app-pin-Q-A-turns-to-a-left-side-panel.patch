@@ -1,4 +1,4 @@
-From 203e3fcb92143492037daa8181750b5c235f2db1 Mon Sep 17 00:00:00 2001
+From 0900e00b1c3d64fa6152a77810e05f700caf5648 Mon Sep 17 00:00:00 2001
 From: xuzhejing <xuzhejing@bytedance.com>
 Date: Tue, 3 Nov 2026 09:55:21 +0800
 Subject: [PATCH 2/3] feat(app): pin Q&A turns to a left-side panel
@@ -10,8 +10,8 @@ Subject: [PATCH 2/3] feat(app): pin Q&A turns to a left-side panel
  packages/app/src/session/composer/region.tsx  |   4 +
  .../src/session/composer/timeline-actions.ts  |   3 +-
  packages/app/src/session/pinned-panel.tsx     | 261 ++++++++++++++++++
- packages/app/src/session/screen-layout.ts     |  26 +-
- packages/app/src/session/screen.tsx           |  23 ++
+ packages/app/src/session/screen-layout.ts     |  30 +-
+ packages/app/src/session/screen.tsx           |  28 +-
  packages/app/src/shell/state/layout.tsx       | 115 ++++++++
  packages/session-ui/src/actions.ts            |   4 +
  .../src/components/message-part.css           |   4 +-
@@ -21,7 +21,7 @@ Subject: [PATCH 2/3] feat(app): pin Q&A turns to a left-side panel
  packages/ui/src/i18n/en.ts                    |   2 +
  packages/ui/src/i18n/zh.ts                    |   2 +
  packages/ui/src/icons/catalog.ts              |   8 +
- 17 files changed, 556 insertions(+), 12 deletions(-)
+ 17 files changed, 563 insertions(+), 14 deletions(-)
  create mode 100644 packages/app/src/session/pinned-panel.tsx
 
 diff --git a/packages/app/e2e/regression/timeline-stream.spec.ts b/packages/app/e2e/regression/timeline-stream.spec.ts
@@ -419,7 +419,7 @@ index 0000000000..1845f15222
 +  )
 +}
 diff --git a/packages/app/src/session/screen-layout.ts b/packages/app/src/session/screen-layout.ts
-index cf61045cbd..3f6cca7edd 100644
+index cf61045cbd..0529a9d4f2 100644
 --- a/packages/app/src/session/screen-layout.ts
 +++ b/packages/app/src/session/screen-layout.ts
 @@ -27,6 +27,10 @@ export function createSessionScreenLayout(
@@ -442,12 +442,16 @@ index cf61045cbd..3f6cca7edd 100644
    })
  
    const splitSide = createMemo(() => tabsOpen() && input.wide())
-@@ -80,16 +84,18 @@ export function createSessionScreenLayout(
+@@ -79,17 +83,22 @@ export function createSessionScreenLayout(
+     })
    })
  
++  // The chat panel's width with the side panel closed: the whole row, less the pinned panel when it shows.
++  const fullWidth = createMemo(() => (pinOpen() ? `calc(100% - ${pinOffset()}px)` : "100%"))
++
    const panelWidth = createMemo(() => {
 -    if (!tabsOpen()) return "100%"
-+    if (!tabsOpen()) return pinOpen() ? `calc(100% - ${pinOffset()}px)` : "100%"
++    if (!tabsOpen()) return fullWidth()
      const current = sized()
  
 -    if (current) return sidePanelWidthCss(current.width)
@@ -468,7 +472,7 @@ index cf61045cbd..3f6cca7edd 100644
    })
  
    const panelMax = createMemo(() => {
-@@ -117,6 +123,10 @@ export function createSessionScreenLayout(
+@@ -117,7 +126,12 @@ export function createSessionScreenLayout(
  
    return {
      centered: createMemo(() => session.isDesktop()),
@@ -477,10 +481,12 @@ index cf61045cbd..3f6cca7edd 100644
 +      width: createMemo(() => view().pin.width()),
 +    },
      panel: {
++      full: fullWidth,
        max: panelMax,
        ref: (element: HTMLDivElement) => {
+         row = element
 diff --git a/packages/app/src/session/screen.tsx b/packages/app/src/session/screen.tsx
-index 8547dbd3ce..bd0b5d671c 100644
+index 8547dbd3ce..3f67981c94 100644
 --- a/packages/app/src/session/screen.tsx
 +++ b/packages/app/src/session/screen.tsx
 @@ -48,6 +48,7 @@ import { SessionHeaderDrag, windowDragEnabled } from "./header/drag-area"
@@ -491,7 +497,25 @@ index 8547dbd3ce..bd0b5d671c 100644
  import { createTimelineCache } from "./timeline/cache"
  import { createPanelMotion, holdLandingWidth, panelOpacity, setPanelResizing } from "@/shell/panel-motion"
  
-@@ -478,6 +479,28 @@ function SessionScreenContent(props: {
+@@ -196,14 +197,15 @@ function SessionScreenContent(props: {
+ 
+       if (!chat) return
+       const open = chatOpenWidth()
++      const full = screen.panel.full()
+ 
+       if (closed === 1) {
+-        chat.style.width = "100%"
++        chat.style.width = full
+ 
+         return
+       }
+ 
+-      chat.style.width = closed === 0 ? open : `calc(${open} + (100% - ${open}) * ${closed})`
++      chat.style.width = closed === 0 ? open : `calc(${open} + (${full} - ${open}) * ${closed})`
+     },
+     element: () => sidePresence,
+     distance: screen.side.width,
+@@ -478,6 +480,28 @@ function SessionScreenContent(props: {
                />
              </div>
            </Show>
