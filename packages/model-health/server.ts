@@ -50,6 +50,23 @@ export default Plugin.define({
       return task
     }
 
+    await ctx.session.hook("http.response", async (event) => {
+      const key = JSON.stringify([`${event.model.providerID}`, `${event.model.id}`])
+      const status = event.response.status
+      if (status >= 200 && status < 300) return
+      const reason: Reason =
+        status === 401 || status === 403
+          ? "authentication"
+          : status === 404
+            ? "not_found"
+            : status === 429
+              ? "rate_limit"
+              : status >= 500
+                ? "provider"
+                : "configuration"
+      cache.set(key, { status: "unavailable", checkedAt: Date.now(), reason })
+    })
+
     await ctx.rpc.register(Definition, { check: (input) => check(input) })
   },
 })
