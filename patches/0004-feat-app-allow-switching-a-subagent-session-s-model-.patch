@@ -1,70 +1,68 @@
-From e7b5bac8cd72852303d0ab7bf6318d74f3b23a9b Mon Sep 17 00:00:00 2001
+From c66de605309053531e8cc91509e311886aad3af2 Mon Sep 17 00:00:00 2001
 From: xuzhejing <xuzhejing@bytedance.com>
 Date: Wed, 11 Nov 2026 18:02:34 +0800
 Subject: [PATCH 4/4] feat(app): allow switching a subagent session's model
  from the subagent bar
 
 ---
- packages/app/src/composer/commands.tsx        | 45 +++++++++++++-
- packages/app/src/session/composer/region.tsx  | 20 ++++++-
+ packages/app/src/composer/commands.tsx        | 43 ++++++++++++-
+ packages/app/src/session/composer/region.tsx  | 47 ++++++++++++++-
  .../app/src/session/composer/subagent-bar.tsx | 60 +++++++++++++------
- 3 files changed, 104 insertions(+), 21 deletions(-)
+ 3 files changed, 128 insertions(+), 22 deletions(-)
 
 diff --git a/packages/app/src/composer/commands.tsx b/packages/app/src/composer/commands.tsx
-index 3ecdc9ac1f..f2e459f384 100644
+index 3ecdc9ac1f..ceb8d93c36 100644
 --- a/packages/app/src/composer/commands.tsx
 +++ b/packages/app/src/composer/commands.tsx
-@@ -19,7 +19,12 @@ const withCategory = (category: string) => {
+@@ -19,7 +19,42 @@ const withCategory = (category: string) => {
    })
  }
  
 -export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
++export type ModelSelected = { providerID: string; modelID: string; variant?: string }
++
++/** The same selection, also reporting each model or variant the user picks, e.g. to apply it to a subagent session. */
++export function observeModelSelection(model: ModelSelection, onSelected: (selection: ModelSelected) => void) {
++  const report = () => {
++    const current = model.current()
++
++    if (current) onSelected({ providerID: current.provider.id, modelID: current.id, variant: model.variant.current() })
++  }
++
++  return {
++    ...model,
++    set(item, options) {
++      model.set(item, options)
++      if (item) report()
++    },
++    variant: {
++      ...model.variant,
++      set(value) {
++        model.variant.set(value)
++        report()
++      },
++      cycle() {
++        model.variant.cycle()
++        report()
++      },
++    },
++  } satisfies ModelSelection
++}
++
 +export const useComposerCommands = (
 +  input: {
 +    model?: ModelSelection
-+    onModelSelected?: (selection: { providerID: string; modelID: string; variant?: string }) => void
++    onModelSelected?: (selection: ModelSelected) => void
 +  } = {},
 +) => {
    const command = useCommand()
    const dialog = useDialog()
    const language = useLanguage()
-@@ -65,9 +70,43 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
+@@ -65,9 +100,11 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
        .finally(() => toaster.dismiss(pending))
    }
  
-+  const selection: ModelSelection = input.onModelSelected
-+    ? {
-+        ...model,
-+        set(item, options) {
-+          model.set(item, options)
-+          if (item)
-+            input.onModelSelected?.({
-+              providerID: item.providerID,
-+              modelID: item.modelID,
-+              variant: model.variant.current(item),
-+            })
-+        },
-+        variant: {
-+          ...model.variant,
-+          set(value) {
-+            model.variant.set(value)
-+            const current = model.current()
-+            if (current)
-+              input.onModelSelected?.({ providerID: current.provider.id, modelID: current.id, variant: value })
-+          },
-+          cycle() {
-+            model.variant.cycle()
-+            const current = model.current()
-+            if (current)
-+              input.onModelSelected?.({
-+                providerID: current.provider.id,
-+                modelID: current.id,
-+                variant: model.variant.current(),
-+              })
-+          },
-+        },
-+      }
-+    : model
++  const selection = input.onModelSelected ? observeModelSelection(model, input.onModelSelected) : model
 +
    const chooseModel = () => {
      sessionOwnership.capture().run(() => {
@@ -73,7 +71,7 @@ index 3ecdc9ac1f..f2e459f384 100644
      })
    }
  
-@@ -104,7 +143,7 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
+@@ -104,7 +141,7 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
        title: language.t("command.model.variant.cycle"),
        description: language.t("command.model.variant.cycle.description"),
        keybind: "shift+mod+d",
@@ -83,50 +81,95 @@ index 3ecdc9ac1f..f2e459f384 100644
      viewCommand({
        id: "usage.view",
 diff --git a/packages/app/src/session/composer/region.tsx b/packages/app/src/session/composer/region.tsx
-index c07e15680a..e7236cd5e6 100644
+index c07e15680a..a01491c7e0 100644
 --- a/packages/app/src/session/composer/region.tsx
 +++ b/packages/app/src/session/composer/region.tsx
-@@ -303,7 +303,23 @@ export function createActiveSessionRegion(input: {
+@@ -26,7 +26,8 @@ import type { QuoteSource } from "@/composer/quote-source"
+ import type { ComposerQuoteAnchor } from "@opencode/plugin/gui"
+ import { useWorkspaceLocation } from "@/workspaces/location"
+ import { requireServerKey, sessionHref } from "@/shell/routes/session"
+-import { useComposerCommands } from "@/composer/commands"
++import { useComposerCommands, observeModelSelection, type ModelSelected } from "@/composer/commands"
++import { DialogSelectModel } from "@/providers/models/select-dialog"
+ import { useSessionCommands } from "../commands/use-session-commands"
+ import type { SessionModel } from "../model"
+ import type { SessionScreenLayout } from "../screen-layout"
+@@ -303,7 +304,12 @@ export function createActiveSessionRegion(input: {
        server.api.session.inbox.cancel({ sessionID, inboxID: messageID }).then(() => undefined, notifyFailed),
    }
  
 -  useComposerCommands()
 +  useComposerCommands({
 +    onModelSelected: (selection) => {
-+      const id = input.session.identity.params.id
-+      if (!id || !input.session.data.isChild()) return
-+      void server.api.session
-+        .switchModel({
-+          sessionID: id,
-+          model: { id: selection.modelID, providerID: selection.providerID, variant: selection.variant },
-+        })
-+        .catch((error) =>
-+          showToast({
-+            title: language.t("common.requestFailed"),
-+            description: errorMessage(error, language.t("common.requestFailed")),
-+          }),
-+        )
++      const id = input.session.data.info()?.id
++      if (id && input.session.data.isChild()) switchSessionModel(server, language, id, selection)
 +    },
 +  })
    useSessionCommands({
      session: input.session,
      region: input.region,
-@@ -422,6 +438,7 @@ export function ActiveSessionComposerRegion(props: {
+@@ -422,6 +428,8 @@ export function ActiveSessionComposerRegion(props: {
    suggestionBoundary: () => HTMLElement | undefined
    onReveal: (target: string) => void
  }) {
-+  const command = useCommand()
++  const dialog = useDialog()
++  const local = useLocal()
    const location = useWorkspaceLocation()
    const data = useData()
    const server = useServerSDK()
-@@ -575,6 +592,7 @@ export function ActiveSessionComposerRegion(props: {
+@@ -563,6 +571,21 @@ export function ActiveSessionComposerRegion(props: {
+     return props.session.data.info()?.outcome
+   }
+ 
++  // Opened from this bar rather than the global `model.choose` command, whose newest registration may belong to
++  // another screen: the choice applies to the subagent session shown here.
++  const chooseSubagentModel = () => {
++    const sessionID = props.session.data.info()?.id
++
++    if (!sessionID) return
++    void dialog.show(() => (
++      <DialogSelectModel
++        model={observeModelSelection(local.model, (selection) =>
++          switchSessionModel(server, language, sessionID, selection),
++        )}
++      />
++    ))
++  }
++
+   return (
+     <SessionComposerRegion
+       controller={props.model.region}
+@@ -575,6 +598,7 @@ export function ActiveSessionComposerRegion(props: {
                status={subagentStatus()}
                started={info().time.created}
                ended={subagentStatus() === "running" ? undefined : (info().time.idle ?? info().time.updated)}
-+              onChooseModel={() => command.trigger("model.choose")}
++              onChooseModel={chooseSubagentModel}
                onBack={props.model.region.openParent}
              />
            )}
+@@ -634,3 +658,22 @@ export function ActiveSessionComposerRegion(props: {
+     />
+   )
+ }
++
++function switchSessionModel(
++  server: ReturnType<typeof useServerSDK>,
++  language: ReturnType<typeof useLanguage>,
++  sessionID: string,
++  selection: ModelSelected,
++) {
++  void server.api.session
++    .switchModel({
++      sessionID,
++      model: { id: selection.modelID, providerID: selection.providerID, variant: selection.variant },
++    })
++    .catch((error) =>
++      showToast({
++        title: language.t("common.requestFailed"),
++        description: errorMessage(error, language.t("common.requestFailed")),
++      }),
++    )
++}
 diff --git a/packages/app/src/session/composer/subagent-bar.tsx b/packages/app/src/session/composer/subagent-bar.tsx
 index 65201332a5..968b6ab2cf 100644
 --- a/packages/app/src/session/composer/subagent-bar.tsx
