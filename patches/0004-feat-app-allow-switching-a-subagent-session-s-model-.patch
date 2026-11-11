@@ -1,0 +1,215 @@
+From e7b5bac8cd72852303d0ab7bf6318d74f3b23a9b Mon Sep 17 00:00:00 2001
+From: xuzhejing <xuzhejing@bytedance.com>
+Date: Wed, 11 Nov 2026 18:02:34 +0800
+Subject: [PATCH 4/4] feat(app): allow switching a subagent session's model
+ from the subagent bar
+
+---
+ packages/app/src/composer/commands.tsx        | 45 +++++++++++++-
+ packages/app/src/session/composer/region.tsx  | 20 ++++++-
+ .../app/src/session/composer/subagent-bar.tsx | 60 +++++++++++++------
+ 3 files changed, 104 insertions(+), 21 deletions(-)
+
+diff --git a/packages/app/src/composer/commands.tsx b/packages/app/src/composer/commands.tsx
+index 3ecdc9ac1f..f2e459f384 100644
+--- a/packages/app/src/composer/commands.tsx
++++ b/packages/app/src/composer/commands.tsx
+@@ -19,7 +19,12 @@ const withCategory = (category: string) => {
+   })
+ }
+ 
+-export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
++export const useComposerCommands = (
++  input: {
++    model?: ModelSelection
++    onModelSelected?: (selection: { providerID: string; modelID: string; variant?: string }) => void
++  } = {},
++) => {
+   const command = useCommand()
+   const dialog = useDialog()
+   const language = useLanguage()
+@@ -65,9 +70,43 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
+       .finally(() => toaster.dismiss(pending))
+   }
+ 
++  const selection: ModelSelection = input.onModelSelected
++    ? {
++        ...model,
++        set(item, options) {
++          model.set(item, options)
++          if (item)
++            input.onModelSelected?.({
++              providerID: item.providerID,
++              modelID: item.modelID,
++              variant: model.variant.current(item),
++            })
++        },
++        variant: {
++          ...model.variant,
++          set(value) {
++            model.variant.set(value)
++            const current = model.current()
++            if (current)
++              input.onModelSelected?.({ providerID: current.provider.id, modelID: current.id, variant: value })
++          },
++          cycle() {
++            model.variant.cycle()
++            const current = model.current()
++            if (current)
++              input.onModelSelected?.({
++                providerID: current.provider.id,
++                modelID: current.id,
++                variant: model.variant.current(),
++              })
++          },
++        },
++      }
++    : model
++
+   const chooseModel = () => {
+     sessionOwnership.capture().run(() => {
+-      void dialog.show(() => <DialogSelectModel model={model} />)
++      void dialog.show(() => <DialogSelectModel model={selection} />)
+     })
+   }
+ 
+@@ -104,7 +143,7 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
+       title: language.t("command.model.variant.cycle"),
+       description: language.t("command.model.variant.cycle.description"),
+       keybind: "shift+mod+d",
+-      onSelect: () => model.variant.cycle(),
++      onSelect: () => selection.variant.cycle(),
+     }),
+     viewCommand({
+       id: "usage.view",
+diff --git a/packages/app/src/session/composer/region.tsx b/packages/app/src/session/composer/region.tsx
+index c07e15680a..e7236cd5e6 100644
+--- a/packages/app/src/session/composer/region.tsx
++++ b/packages/app/src/session/composer/region.tsx
+@@ -303,7 +303,23 @@ export function createActiveSessionRegion(input: {
+       server.api.session.inbox.cancel({ sessionID, inboxID: messageID }).then(() => undefined, notifyFailed),
+   }
+ 
+-  useComposerCommands()
++  useComposerCommands({
++    onModelSelected: (selection) => {
++      const id = input.session.identity.params.id
++      if (!id || !input.session.data.isChild()) return
++      void server.api.session
++        .switchModel({
++          sessionID: id,
++          model: { id: selection.modelID, providerID: selection.providerID, variant: selection.variant },
++        })
++        .catch((error) =>
++          showToast({
++            title: language.t("common.requestFailed"),
++            description: errorMessage(error, language.t("common.requestFailed")),
++          }),
++        )
++    },
++  })
+   useSessionCommands({
+     session: input.session,
+     region: input.region,
+@@ -422,6 +438,7 @@ export function ActiveSessionComposerRegion(props: {
+   suggestionBoundary: () => HTMLElement | undefined
+   onReveal: (target: string) => void
+ }) {
++  const command = useCommand()
+   const location = useWorkspaceLocation()
+   const data = useData()
+   const server = useServerSDK()
+@@ -575,6 +592,7 @@ export function ActiveSessionComposerRegion(props: {
+               status={subagentStatus()}
+               started={info().time.created}
+               ended={subagentStatus() === "running" ? undefined : (info().time.idle ?? info().time.updated)}
++              onChooseModel={() => command.trigger("model.choose")}
+               onBack={props.model.region.openParent}
+             />
+           )}
+diff --git a/packages/app/src/session/composer/subagent-bar.tsx b/packages/app/src/session/composer/subagent-bar.tsx
+index 65201332a5..968b6ab2cf 100644
+--- a/packages/app/src/session/composer/subagent-bar.tsx
++++ b/packages/app/src/session/composer/subagent-bar.tsx
+@@ -18,11 +18,32 @@ export function SubagentBar(props: {
+   status?: SubagentStatus
+   started: number
+   ended?: number
++  onChooseModel?: () => void
+   onBack: () => void
+ }) {
+   const language = useLanguage()
+   const [now, setNow] = createSignal(Date.now())
+ 
++  const modelContent = (model: () => NonNullable<typeof props.model>) => (
++    <>
++      <Show when={model().provider}>
++        <span class="shrink-0">{model().provider}</span>
++        <Slash gap={4} />
++        <span class="sr-only">{" / "}</span>
++      </Show>
++      <span class="truncate">{model().name}</span>
++      {/* Like the message metadata: the variant follows the name, dimmer, with no separator. */}
++      <Show when={model().variant !== "default" && model().variant}>
++        {(variant) => (
++          <>
++            <span class="sr-only">{" "}</span>
++            <span class="ms-1 shrink-0 capitalize opacity-[0.66]">{variant()}</span>
++          </>
++        )}
++      </Show>
++    </>
++  )
++
+   // Only what is known shows, with one separator between neighbours.
+   const parts = () => [
+     ...(props.status ? (["status", "elapsed"] as const) : []),
+@@ -81,23 +102,28 @@ export function SubagentBar(props: {
+                 </Match>
+                 <Match when={part === "model" && props.model}>
+                   {(model) => (
+-                    <span data-slot="subagent-model" class="flex min-w-0">
+-                      <Show when={model().provider}>
+-                        <span class="shrink-0">{model().provider}</span>
+-                        <Slash gap={4} />
+-                        <span class="sr-only">{" / "}</span>
+-                      </Show>
+-                      <span class="truncate">{model().name}</span>
+-                      {/* Like the message metadata: the variant follows the name, dimmer, with no separator. */}
+-                      <Show when={model().variant !== "default" && model().variant}>
+-                        {(variant) => (
+-                          <>
+-                            <span class="sr-only">{" "}</span>
+-                            <span class="ms-1 shrink-0 capitalize opacity-[0.66]">{variant()}</span>
+-                          </>
+-                        )}
+-                      </Show>
+-                    </span>
++                    <Show
++                      when={props.onChooseModel}
++                      fallback={
++                        <span data-slot="subagent-model" class="flex min-w-0">
++                          {modelContent(model)}
++                        </span>
++                      }
++                    >
++                      {(choose) => (
++                        <button
++                          type="button"
++                          data-slot="subagent-model"
++                          aria-label={language.t("command.model.choose")}
++                          title={language.t("command.model.choose")}
++                          class="-mx-1 flex min-w-0 items-center rounded px-1 py-0.5 text-inherit transition-colors hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base focus-visible:bg-v2-overlay-simple-overlay-hover focus-visible:text-v2-text-text-base focus-visible:outline-none"
++                          onClick={() => choose()()}
++                        >
++                          {modelContent(model)}
++                          <Icon name="chevron-down" size="small" class="-mr-0.5 ml-0.5 shrink-0 opacity-70" />
++                        </button>
++                      )}
++                    </Show>
+                   )}
+                 </Match>
+               </Switch>
+-- 
+2.50.1 (Apple Git-155)
+

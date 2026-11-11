@@ -1,7 +1,7 @@
 From 0900e00b1c3d64fa6152a77810e05f700caf5648 Mon Sep 17 00:00:00 2001
 From: xuzhejing <xuzhejing@bytedance.com>
 Date: Tue, 3 Nov 2026 09:55:21 +0800
-Subject: [PATCH 2/3] feat(app): pin Q&A turns to a left-side panel
+Subject: [PATCH 2/4] feat(app): pin Q&A turns to a left-side panel
 
 ---
  .../e2e/regression/timeline-stream.spec.ts    |  51 ++++
