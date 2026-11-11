@@ -245,21 +245,9 @@ export default Plugin.define({
       const explicitVariant = event.model.variant !== undefined && event.model.variant !== "default"
       const { anchor, userText, toolFailures, spawnedSubagent } = extractTurnContext(event.messages)
 
-      // Subagent routing ("爆兵"): fast & cheap worker models within the active model family!
+      // Subagents keep the model and effort they were started with.
       if (event.agent === "explore" || event.agent === "general" || spawnedSubagent) {
-        if (explicitVariant) {
-          nextRequestDecision.delete(`${event.sessionID}:primary`)
-          return
-        }
-        const isExplore = event.agent === "explore"
-        const thorough = /very\s+thorough|全面深入/i.test(userText)
-        let tier: Tier = isExplore ? (thorough ? "medium" : "low") : "medium"
-        if (toolFailures >= 2 && tier === "low") tier = "medium"
-        else if (toolFailures >= 3) tier = "high"
-        recordDecision(event.sessionID, "primary", event.model, event.options, {
-          role: isExplore ? "subagent-explore" : "subagent-general",
-          tier,
-        })
+        nextRequestDecision.delete(`${event.sessionID}:primary`)
         return
       }
 
@@ -289,6 +277,9 @@ export default Plugin.define({
     await ctx.session.hook("http.request", async (event) => {
       const key = `${event.sessionID}:${event.kind}`
       const isChildHeader = Boolean(event.request.headers.get("x-opencode-parent-session-id"))
+      const isPrimary = event.kind !== "title" && event.kind !== "compaction" && event.kind !== "generate"
+      // Subagents keep the model they were started with.
+      if (isPrimary && (isChildHeader || event.agent === "explore" || event.agent === "general")) return
       const fallback: Decision =
         event.kind === "title"
           ? { role: "title", tier: "low" }
@@ -296,9 +287,7 @@ export default Plugin.define({
             ? { role: "compaction", tier: "medium" }
             : event.kind === "generate"
               ? { role: "generate", tier: "medium" }
-              : isChildHeader
-                ? { role: event.agent === "explore" ? "subagent-explore" : "subagent-general", tier: "medium" }
-                : { role: "main", tier: "high" }
+              : { role: "main", tier: "high" }
 
       const decision = nextRequestDecision.get(key) ?? fallback
       const explicitVariant = event.model.variant !== undefined && event.model.variant !== "default"
