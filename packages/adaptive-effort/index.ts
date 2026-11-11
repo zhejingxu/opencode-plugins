@@ -1,7 +1,7 @@
 import { Plugin } from "@opencode/plugin"
 
 type Tier = "low" | "medium" | "high"
-type Role = "main" | "subagent-explore" | "subagent-general" | "compaction" | "title" | "generate"
+type Role = "main" | "compaction" | "title"
 
 const SYNTHETIC_PREFIXES = [
   "Instructions from: ",
@@ -156,36 +156,31 @@ export default Plugin.define({
 
     /**
      * Maps `(providerID, currentModelID, decision)` to the target model ID within the SAME provider & model ecosystem:
-     * - Main session (`role === "main"`): keeps the flagship model family (e.g. Opus stays Opus, Argon stays Argon),
-     *   only adjusting `-high` -> `-medium` / `-low` when appropriate.
-     * - Subagents (`subagent-explore`, `subagent-general`) & auxiliary (`title`, `compaction`, `generate`):
-     *   routes worker tasks to cheaper, faster sibling models in the same ecosystem:
-     *   - Claude Opus / Fable -> Claude Sonnet 5.5 (`low` for explore/title, `medium` for general/compaction)
-     *   - Gemini 4 Argon -> `gemini-4-argon-low` (explore/title) or `gemini-4-argon-medium` (general/compaction)
-     *   - GPT-6 Sol / Astra -> `gpt-6-luna` (for explore/title)
+     * - Main session (`role === "main"`), subagents, and `generate` probes: never rewrite the model ID so the selected
+     *   or probed model is always the exact one requested.
+     * - Auxiliary (`title`, `compaction`): routes background tasks to cheaper, faster sibling models:
+     *   - Claude Opus / Fable -> Claude Sonnet 5.5 (`low` for title, `medium` for compaction)
+     *   - Gemini 4 Argon -> `gemini-4-argon-low` (title) or `gemini-4-argon-medium` (compaction)
+     *   - GPT-6 Sol / Astra -> `gpt-6-luna` (for title)
      */
     const resolveTargetModel = (providerID: string, currentModelID: string, decision: Decision): string | undefined => {
+      const { role, tier } = decision
+      if (role !== "title" && role !== "compaction") return undefined
+
       const known = availableByProvider.get(providerID)
       const has = (id: string) => (known ? known.has(id) : true)
-      const { role, tier } = decision
-      const isWorker = role !== "main"
 
       const suffixMatch = SUFFIX_RE.exec(currentModelID)
       if (suffixMatch) {
-        let prefix = suffixMatch[1]!
+        const prefix = suffixMatch[1]!
         const currentTier = suffixMatch[2] as Tier
 
-        // For subagents / compaction / title on suffix-based Claude Opus, step down to Sonnet in the same provider.
-        if (isWorker && prefix.startsWith("claude-opus-5-5") && has(`claude-sonnet-5-5-${tier}`)) {
+        // For compaction / title on suffix-based Claude Opus, step down to Sonnet in the same provider.
+        if (prefix.startsWith("claude-opus-5-5") && has(`claude-sonnet-5-5-${tier}`)) {
           return `claude-sonnet-5-5-${tier}`
         }
 
-        if (!isWorker) {
-          if (currentTier === "low") return undefined
-          if (currentTier === "medium" && tier !== "low") return undefined
-        }
-
-        if (tier === currentTier && prefix === suffixMatch[1]) return undefined
+        if (tier === currentTier) return undefined
         const candidates =
           tier === "low"
             ? [`${prefix}-low`, `${prefix}-medium`]
@@ -196,15 +191,15 @@ export default Plugin.define({
       }
 
       // Non-suffix Claude models (e.g. `gateway/claude-opus-5-5`, `gateway/claude-fable-5`):
-      // Route subagents, title, and compaction to Sonnet 5.5 / 5 on the same gateway.
-      if (isWorker && /^claude-(?:opus|fable)-5/.test(currentModelID)) {
+      // Route title and compaction to Sonnet 5.5 / 5 on the same gateway.
+      if (/^claude-(?:opus|fable)-5/.test(currentModelID)) {
         for (const candidate of ["claude-sonnet-5-5", "claude-sonnet-5"]) {
           if (has(candidate)) return candidate
         }
       }
 
-      // Non-suffix GPT-6 models on `relay`: route fast explore/title workers to `gpt-6-luna` when present.
-      if ((role === "subagent-explore" || role === "title") && /^gpt-6(?:\.1)?-(?:sol|astra)$/.test(currentModelID)) {
+      // Non-suffix GPT-6 models on `relay`: route fast title workers to `gpt-6-luna` when present.
+      if (role === "title" && /^gpt-6(?:\.1)?-(?:sol|astra)$/.test(currentModelID)) {
         if (has("gpt-6-luna")) return "gpt-6-luna"
       }
 
@@ -213,7 +208,7 @@ export default Plugin.define({
 
     const recordDecision = (
       sessionID: string,
-      kind: "primary" | "compaction" | "title" | "generate",
+      kind: "primary" | "compaction" | "title",
       model: { readonly providerID: string; readonly id: string; readonly variant?: string },
       options: Record<string, unknown>,
       decision: Decision,
@@ -235,10 +230,6 @@ export default Plugin.define({
 
     await ctx.session.hook("compaction", async (event) => {
       recordDecision(event.sessionID, "compaction", event.model, event.options, { role: "compaction", tier: "medium" })
-    })
-
-    await ctx.session.hook("generate", async (event) => {
-      recordDecision(event.sessionID, "generate", event.model, event.options, { role: "generate", tier: "medium" })
     })
 
     await ctx.session.hook("context", async (event) => {
@@ -275,19 +266,10 @@ export default Plugin.define({
     })
 
     await ctx.session.hook("http.request", async (event) => {
+      if (event.kind !== "title" && event.kind !== "compaction") return
       const key = `${event.sessionID}:${event.kind}`
-      const isChildHeader = Boolean(event.request.headers.get("x-opencode-parent-session-id"))
-      const isPrimary = event.kind !== "title" && event.kind !== "compaction" && event.kind !== "generate"
-      // Subagents keep the model they were started with.
-      if (isPrimary && (isChildHeader || event.agent === "explore" || event.agent === "general")) return
       const fallback: Decision =
-        event.kind === "title"
-          ? { role: "title", tier: "low" }
-          : event.kind === "compaction"
-            ? { role: "compaction", tier: "medium" }
-            : event.kind === "generate"
-              ? { role: "generate", tier: "medium" }
-              : { role: "main", tier: "high" }
+        event.kind === "title" ? { role: "title", tier: "low" } : { role: "compaction", tier: "medium" }
 
       const decision = nextRequestDecision.get(key) ?? fallback
       const explicitVariant = event.model.variant !== undefined && event.model.variant !== "default"
