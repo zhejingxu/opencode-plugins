@@ -1,0 +1,174 @@
+From 937472ed1b2b821978c4a03da0c9e49cc8160bed Mon Sep 17 00:00:00 2001
+From: xuzhejing <xuzhejing@bytedance.com>
+Date: Fri, 13 Nov 2026 13:55:40 +0800
+Subject: [PATCH 5/5] fix(plugin-browser): keep browser tools out of child
+ sessions
+
+---
+ packages/core/test/browser-attach.test.ts | 38 +++++++++++++++++++++++
+ packages/plugin-browser/src/connection.ts |  1 +
+ packages/plugin-browser/src/machine.ts    | 11 +++++++
+ packages/plugin-browser/src/tools.ts      | 19 ++++++++++--
+ 4 files changed, 66 insertions(+), 3 deletions(-)
+
+diff --git a/packages/core/test/browser-attach.test.ts b/packages/core/test/browser-attach.test.ts
+index f7685ec868..c83b22bd26 100644
+--- a/packages/core/test/browser-attach.test.ts
++++ b/packages/core/test/browser-attach.test.ts
+@@ -5,11 +5,16 @@ import type { Permission } from "@opencode/schema/permission"
+ import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
+ import { LayerNode } from "@opencode/util/effect/layer-node"
+ import { Global } from "@opencode/util/global"
++import type { SessionHooks } from "@opencode/plugin/effect/session"
+ import { Bus } from "@opencode/core/bus"
+ import { Database } from "@opencode/core/database/database"
++import { Agent } from "@opencode/core/agent"
+ import { Location } from "@opencode/core/location"
+ import { LocationServiceMap } from "@opencode/core/location-services"
++import { Model } from "@opencode/core/model"
+ import { Plugin } from "@opencode/core/plugin"
++import { PluginHooks } from "@opencode/core/plugin/hooks"
++import { Provider } from "@opencode/core/provider"
+ import { Rpc } from "@opencode/core/rpc"
+ import { AbsolutePath } from "@opencode/core/schema"
+ import { Session } from "@opencode/core/session"
+@@ -103,9 +108,29 @@ const setup = Effect.gen(function* () {
+     ),
+     Effect.forkScoped({ startImmediately: true }),
+   )
++  const hooks = Context.get(context, PluginHooks.Service)
++  // The tools a request sends directly, after the browser plugin's context hook.
++  const directTools = (sessionID: Session.ID) =>
++    Effect.gen(function* () {
++      const tool = { description: "", input: { type: "object" } }
++      const event: SessionHooks["context"] = {
++        sessionID,
++        agent: Agent.ID.make("explore"),
++        model: Model.Ref.make({ providerID: Provider.ID.make("test"), id: Model.ID.make("test") }),
++        system: [],
++        messages: [],
++        tools: { browser_click: tool, browser_tabs_open: tool, read: tool },
++        options: {},
++      }
++      yield* hooks.trigger("session", "context", event)
++      return Object.keys(event.tools)
++    })
+   return {
+     ref,
+     locations,
++    session,
++    sessions,
++    directTools,
+     attach: (connectionID: string) =>
+       rpc.attach({ sessionID: session.id, connectionID, version: 4 }).pipe(Effect.forkScoped),
+     attached: (connectionID: string) => Deferred.await(handshake(connectionID)).pipe(Effect.timeout("10 seconds")),
+@@ -148,3 +173,16 @@ it.live("disposing the plugin revokes the browser rules before the location fini
+     expect(yield* browser.permissions).toEqual([user])
+   }),
+ )
++
++it.live("child sessions inherit the browser grant but are not sent browser tools", () =>
++  Effect.gen(function* () {
++    const browser = yield* setup
++    yield* browser.attach("conn_1")
++    yield* browser.attached("conn_1")
++    const child = yield* browser.sessions.create({ parentID: browser.session.id })
++    expect(child.permissions).toEqual([user, ...allows])
++
++    expect(yield* browser.directTools(browser.session.id)).toEqual(["browser_click", "browser_tabs_open", "read"])
++    expect(yield* browser.directTools(child.id)).toEqual(["read"])
++  }),
++)
+diff --git a/packages/plugin-browser/src/connection.ts b/packages/plugin-browser/src/connection.ts
+index 9658173677..f71e6dd0bd 100644
+--- a/packages/plugin-browser/src/connection.ts
++++ b/packages/plugin-browser/src/connection.ts
+@@ -253,6 +253,7 @@ export const make = Effect.fn("BrowserConnection.make")(function* (
+   })
+ 
+   return {
++    attached: (sessionID: Session.ID) => BrowserMachine.hasAttachment(machine.state, sessionID),
+     target: Effect.fn("BrowserConnection.target")(function* (sessionID: Session.ID, action: Browser.Action) {
+       const selected = BrowserMachine.selectTarget(machine.state, sessionID, action)
+       if (!selected.ok) return yield* selected.error
+diff --git a/packages/plugin-browser/src/machine.ts b/packages/plugin-browser/src/machine.ts
+index 0547ab8702..20b028110d 100644
+--- a/packages/plugin-browser/src/machine.ts
++++ b/packages/plugin-browser/src/machine.ts
+@@ -570,6 +570,17 @@ export function isConnectionDisposed(state: ConnectionState) {
+   return state.status === "disposed"
+ }
+ 
++/**
++ * Whether the session has its own attachment, connecting or connected. Child sessions inherit the parent's browser
++ * grant with their permissions but never an attachment, so their browser tools could only fail.
++ */
++export function hasAttachment(state: ConnectionState, sessionID: Session.ID) {
++  if (state.status === "disposed") return false
++  const entry = state.sessions.get(sessionID)
++
++  return entry !== undefined && entry.status !== "revoking"
++}
++
+ /** The attempt the next `attach` gets; the driver keys its handle by it before dispatching `attach.started`. */
+ export function selectNextAttempt(state: ConnectionState) {
+   return state.nextAttempt
+diff --git a/packages/plugin-browser/src/tools.ts b/packages/plugin-browser/src/tools.ts
+index 2a760c2c46..6384380eb9 100644
+--- a/packages/plugin-browser/src/tools.ts
++++ b/packages/plugin-browser/src/tools.ts
+@@ -10,7 +10,7 @@ import { Browser } from "./rpc.js"
+ import { BrowserSkill } from "./skill.js"
+ 
+ export const register = Effect.fn("BrowserTools.register")(function* (
+-  ctx: Pick<Context, "tool" | "skill" | "location">,
++  ctx: Pick<Context, "tool" | "skill" | "location" | "session">,
+   connection: BrowserConnection.Connection,
+ ) {
+   const execute = Effect.fn("BrowserTools.execute")(function* (
+@@ -33,6 +33,8 @@ export const register = Effect.fn("BrowserTools.register")(function* (
+   })
+ 
+   yield* ctx.skill.transform((editor) => editor.add(BrowserSkill.info))
++  // Names the model sees when a tool is sent directly rather than through Code Mode.
++  const direct = new Set<string>()
+   yield* ctx.tool
+     .transform((editor) => {
+       editor.namespace({
+@@ -42,13 +44,16 @@ export const register = Effect.fn("BrowserTools.register")(function* (
+       })
+       Browser.Operations.forEach((operation) => {
+         const separator = operation.name.lastIndexOf(".")
++        const name = operation.name.slice(separator + 1)
++        const namespace = separator < 0 ? "browser" : `browser.${operation.name.slice(0, separator)}`
++        direct.add(`${namespace.replaceAll(".", "_")}_${name}`)
+         editor.add({
+-          name: operation.name.slice(separator + 1),
++          name,
+           description: operation.description,
+           input: operation.input,
+           output: operation.output,
+           options: {
+-            namespace: separator < 0 ? "browser" : `browser.${operation.name.slice(0, separator)}`,
++            namespace,
+             permission: "browser",
+             codemode: true,
+           },
+@@ -58,6 +63,14 @@ export const register = Effect.fn("BrowserTools.register")(function* (
+       })
+     })
+     .pipe(Effect.orDie)
++  // A child session inherits the browser grant with its parent's permissions, but the attachment belongs to the
++  // parent, so every call from the child fails. Agents without Code Mode, such as explore, would otherwise receive
++  // all browser tools directly.
++  yield* ctx.session.hook("context", (event) => {
++    if (connection.attached(event.sessionID)) return Effect.void
++    for (const name of Object.keys(event.tools)) if (direct.has(name)) delete event.tools[name]
++    return Effect.void
++  })
+ })
+ 
+ function decodeResult(operation: Browser.Operation, result: Browser.Result) {
+-- 
+2.50.1 (Apple Git-155)
+

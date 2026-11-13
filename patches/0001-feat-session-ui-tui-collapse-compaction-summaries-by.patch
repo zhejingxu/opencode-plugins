@@ -1,7 +1,7 @@
 From 61a930c5f42349a0f3c0eb5140929120cbb7650a Mon Sep 17 00:00:00 2001
 From: xuzhejing <xuzhejing@bytedance.com>
 Date: Tue, 3 Nov 2026 09:55:14 +0800
-Subject: [PATCH 1/4] feat(session-ui,tui): collapse compaction summaries by
+Subject: [PATCH 1/5] feat(session-ui,tui): collapse compaction summaries by
  default
 
 ---
