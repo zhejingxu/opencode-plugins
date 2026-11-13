@@ -12,7 +12,7 @@ on a new machine in two commands.
 | [`patches/0002`](patches) | source patch | Desktop: pin Q&A turns to a left-side panel |
 | [`patches/0003`](patches) | source patch | Desktop: model health dots and "Check" in the model selector (uses `model-health`) |
 | [`patches/0004`](patches) | source patch | Desktop: switch a subagent session's model from the subagent bar |
-| [`patches/0005`](patches) | source patch | Browser plugin: keep browser tools out of child sessions (upstream PR pending) |
+| [`patches/0005`](patches) | source patch | Browser plugin: keep browser tools out of child sessions (upstream PR #63691) |
 
 The plugins use only the public plugin API (`@opencode/plugin`, `@opencode/plugin/tui`). The patches touch the
 Desktop/TUI timeline and model picker, which have no plugin extension point as of v2.2.5 (Desktop GUI plugins exist now, but offer no per-message actions, left region or reveal-message API); see [`issues/`](issues) for
