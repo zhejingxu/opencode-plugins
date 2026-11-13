@@ -1,0 +1,17 @@
+{
+  "name": "@xuzhejing/opencode-tool-schema-guard",
+  "version": "0.1.0",
+  "description": "Keeps browser tools out of read-only subagents and drops enum on non-string tool schemas",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.ts",
+    "./server": "./index.ts"
+  },
+  "files": [
+    "index.ts"
+  ],
+  "peerDependencies": {
+    "@opencode/plugin": "^2.0.29 || ^0.0.0-dev"
+  }
+}
