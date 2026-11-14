@@ -1,0 +1,35 @@
+From f2327014d6a69c324d4ba03acb7f6d2e53e82a7d Mon Sep 17 00:00:00 2001
+From: xuzhejing <xuzhejing@bytedance.com>
+Date: Sat, 14 Nov 2026 15:49:03 +0800
+Subject: [PATCH 6/6] feat(app): open new session tabs at the start of the tab
+ strip
+
+---
+ packages/app/src/shell/tabs/tabs.tsx | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/packages/app/src/shell/tabs/tabs.tsx b/packages/app/src/shell/tabs/tabs.tsx
+index 683be73bc6..e10b3274d6 100644
+--- a/packages/app/src/shell/tabs/tabs.tsx
++++ b/packages/app/src/shell/tabs/tabs.tsx
+@@ -474,7 +474,7 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
+           setStore(
+             produce((tabs) => {
+               if (tabs.some((item) => tabKey(item) === tabKey(next))) return
+-              tabs.push(next)
++              tabs.unshift(next)
+             }),
+           )
+         })
+@@ -512,7 +512,7 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
+           preview.clear()
+           setStore(
+             produce((tabs) => {
+-              tabs.push(tab)
++              tabs.unshift(tab)
+             }),
+           )
+           navigate(draftHref(draftID))
+-- 
+2.50.1 (Apple Git-155)
+
