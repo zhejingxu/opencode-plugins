@@ -8,6 +8,7 @@ on a new machine in two commands.
 | [`packages/model-health`](packages/model-health) | server + TUI plugin | On-demand model availability probes (`model-health` RPC, `/health`, `/health-all`) |
 | [`packages/adaptive-effort`](packages/adaptive-effort) | server plugin | Per-turn reasoning effort and cheaper sibling models for subagents/title/compaction |
 | [`packages/tool-schema-guard`](packages/tool-schema-guard) | server plugin | Hotfix: keeps browser tools out of `explore` and drops `enum` on non-string tool schemas (Cloud Code / Gemini 400) |
+| [`packages/auto-handoff`](packages/auto-handoff) | server plugin | Compacts large-window sessions at ~300k tokens (per-model policy from the live model list) and saves a handoff file before every compaction |
 | [`patches/0001`](patches) | source patch | Desktop + TUI: compaction summaries collapsed by default |
 | [`patches/0002`](patches) | source patch | Desktop: pin Q&A turns to a left-side panel |
 | [`patches/0003`](patches) | source patch | Desktop: model health dots and "Check" in the model selector (uses `model-health`) |

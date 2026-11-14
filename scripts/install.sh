@@ -26,5 +26,6 @@ if [ -f "$target/adaptive-effort.ts" ] && [ ! -L "$target/adaptive-effort.ts" ];
 fi
 link "$repo/packages/adaptive-effort" "adaptive-effort"
 link "$repo/packages/tool-schema-guard" "tool-schema-guard"
+link "$repo/packages/auto-handoff" "auto-handoff"
 
 echo "Done. OpenCode reloads plugin directories automatically; restart it if the plugins do not appear."
