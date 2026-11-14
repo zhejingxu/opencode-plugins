@@ -1,4 +1,4 @@
-From 937472ed1b2b821978c4a03da0c9e49cc8160bed Mon Sep 17 00:00:00 2001
+From 8f94da376903721e2ce27b3d7261c21791edfaea Mon Sep 17 00:00:00 2001
 From: xuzhejing <xuzhejing@bytedance.com>
 Date: Fri, 13 Nov 2026 13:55:40 +0800
 Subject: [PATCH 5/6] fix(plugin-browser): keep browser tools out of child

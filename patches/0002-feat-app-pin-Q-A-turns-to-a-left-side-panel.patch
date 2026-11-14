@@ -1,4 +1,4 @@
-From 0900e00b1c3d64fa6152a77810e05f700caf5648 Mon Sep 17 00:00:00 2001
+From 1aa8aa9d8e7e0033e5408025d4040875cf16e3f4 Mon Sep 17 00:00:00 2001
 From: xuzhejing <xuzhejing@bytedance.com>
 Date: Tue, 3 Nov 2026 09:55:21 +0800
 Subject: [PATCH 2/6] feat(app): pin Q&A turns to a left-side panel
@@ -13,6 +13,7 @@ Subject: [PATCH 2/6] feat(app): pin Q&A turns to a left-side panel
  packages/app/src/session/screen-layout.ts     |  30 +-
  packages/app/src/session/screen.tsx           |  28 +-
  packages/app/src/shell/state/layout.tsx       | 115 ++++++++
+ packages/plugin/src/gui/icon-name.ts          |   2 +
  packages/session-ui/src/actions.ts            |   4 +
  .../src/components/message-part.css           |   4 +-
  .../src/message/current-message.tsx           |   4 +
@@ -21,7 +22,7 @@ Subject: [PATCH 2/6] feat(app): pin Q&A turns to a left-side panel
  packages/ui/src/i18n/en.ts                    |   2 +
  packages/ui/src/i18n/zh.ts                    |   2 +
  packages/ui/src/icons/catalog.ts              |   8 +
- 17 files changed, 563 insertions(+), 14 deletions(-)
+ 18 files changed, 565 insertions(+), 14 deletions(-)
  create mode 100644 packages/app/src/session/pinned-panel.tsx
 
 diff --git a/packages/app/e2e/regression/timeline-stream.spec.ts b/packages/app/e2e/regression/timeline-stream.spec.ts
@@ -684,6 +685,19 @@ index 4ec86e6dc8..f499a26238 100644
          }
        },
        /** Side panel tabs for any session key, mounted or not. Reads are reactive. */
+diff --git a/packages/plugin/src/gui/icon-name.ts b/packages/plugin/src/gui/icon-name.ts
+index 7d117eee1e..5d3d6360d7 100644
+--- a/packages/plugin/src/gui/icon-name.ts
++++ b/packages/plugin/src/gui/icon-name.ts
+@@ -130,6 +130,8 @@ export type IconName =
+   | "outline-xmark"
+   | "pencil-line"
+   | "photo"
++  | "pin"
++  | "pin-active"
+   | "plus"
+   | "plus-small"
+   | "post-skill"
 diff --git a/packages/session-ui/src/actions.ts b/packages/session-ui/src/actions.ts
 index aa34f8b3d6..a8e8a9ba34 100644
 --- a/packages/session-ui/src/actions.ts

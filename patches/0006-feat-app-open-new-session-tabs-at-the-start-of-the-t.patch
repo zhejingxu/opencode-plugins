@@ -1,4 +1,4 @@
-From f2327014d6a69c324d4ba03acb7f6d2e53e82a7d Mon Sep 17 00:00:00 2001
+From dba547c832895df7e323ba70ecafb0471fe0839e Mon Sep 17 00:00:00 2001
 From: xuzhejing <xuzhejing@bytedance.com>
 Date: Sat, 14 Nov 2026 15:49:03 +0800
 Subject: [PATCH 6/6] feat(app): open new session tabs at the start of the tab

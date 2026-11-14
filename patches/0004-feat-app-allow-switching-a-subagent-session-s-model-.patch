@@ -1,4 +1,4 @@
-From c66de605309053531e8cc91509e311886aad3af2 Mon Sep 17 00:00:00 2001
+From 4e6265b5fb4a54866d9310cb42f2882ed70f7b16 Mon Sep 17 00:00:00 2001
 From: xuzhejing <xuzhejing@bytedance.com>
 Date: Wed, 11 Nov 2026 18:02:34 +0800
 Subject: [PATCH 4/6] feat(app): allow switching a subagent session's model
