@@ -141,6 +141,13 @@ function inputRecord(input: unknown): Record<string, unknown> {
   return {}
 }
 
+/** Keeps the first `head` items (the original task usually comes first) and the most recent rest, marking the gap. */
+export function keepEnds(items: string[], max: number, head: number) {
+  if (items.length <= max) return items
+  const tail = max - head
+  return [...items.slice(0, head), `…（中间省略 ${items.length - max} 条，完整记录见会话历史）`, ...items.slice(-tail)]
+}
+
 /** Facts a summary tends to lose, read straight from the transcript before it is compacted. */
 export function extractLedger(messages: ReadonlyArray<LedgerMessage>): Ledger {
   const requests: string[] = []
@@ -187,7 +194,7 @@ export function extractLedger(messages: ReadonlyArray<LedgerMessage>): Ledger {
   }
 
   return {
-    requests: requests.slice(-60),
+    requests: keepEnds(requests, 150, 30),
     urls: urls.slice(-120),
     files: files.slice(-120),
     git: git.slice(-40),

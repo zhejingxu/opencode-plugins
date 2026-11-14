@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { builtinTrigger, extractLedger, planFor, promptTokens, renderLedger, renderPolicy, slug } from "../lib.ts"
+import { builtinTrigger, extractLedger, keepEnds, planFor, promptTokens, renderLedger, renderPolicy, slug } from "../lib.ts"
 
 describe("planFor", () => {
   test("1M window compacts at 300k", () => {
@@ -52,6 +52,12 @@ test("extractLedger keeps user requests, links, files and git operations", () =>
   const text = renderLedger({ ledger, at: new Date(0), reason: "test", tokens: 301_000, round: 1 })
   expect(text).toContain("第 1 次压缩")
   expect(text).toContain("301k")
+})
+
+test("keepEnds keeps the first and latest items", () => {
+  const items = Array.from({ length: 10 }, (_, i) => `r${i}`)
+  expect(keepEnds(items, 20, 3)).toEqual(items)
+  expect(keepEnds(items, 5, 2)).toEqual(["r0", "r1", "…（中间省略 5 条，完整记录见会话历史）", "r7", "r8", "r9"])
 })
 
 test("slug and policy rendering", () => {

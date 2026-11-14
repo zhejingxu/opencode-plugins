@@ -10,7 +10,9 @@
   },
   "files": [
     "index.ts",
-    "lib.ts"
+    "lib.ts",
+    "backfill.ts",
+    "README.md"
   ],
   "peerDependencies": {
     "@opencode/plugin": "^2.0.29 || ^0.0.0-dev"

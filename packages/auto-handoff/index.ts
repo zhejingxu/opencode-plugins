@@ -1,5 +1,5 @@
 import { Plugin } from "@opencode/plugin"
-import { appendFile, mkdir, writeFile } from "node:fs/promises"
+import { access, appendFile, mkdir, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import path from "node:path"
 import {
@@ -114,6 +114,8 @@ export default Plugin.define({
       shared.files.set(sessionID, file)
       await ctx.storage.set(`file/${sessionID}`, file)
       await mkdir(dir, { recursive: true })
+      // A backfilled file for this session may already exist under the same name; keep its header.
+      if (await access(file).then(() => true, () => false)) return { file, created: false }
       const header = [
         `# 会话交接：${info?.title ?? sessionID}`,
         "",
