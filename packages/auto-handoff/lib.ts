@@ -52,7 +52,8 @@ export function promptTokens(tokens: Usage | undefined) {
 }
 
 export const SUMMARY_INSTRUCTION = [
-  "In addition to the normal summary, end it with a section titled `## Key facts ledger`.",
+  "Harness formatting rule for this summary (not a user requirement; do not list it under requirements or in the ledger):",
+  "in addition to the normal summary, end it with a section titled `## Key facts ledger`.",
   "List, verbatim and without paraphrasing identifiers:",
   "- Every explicit user requirement, preference or constraint still in force.",
   "- Repositories, branches, commits, MRs, builds, deployments, lanes/environments and their current state.",
